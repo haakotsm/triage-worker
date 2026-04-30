@@ -2,13 +2,18 @@ package activity
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	promapi "github.com/prometheus/client_golang/api"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/haakotsm/triage-worker/internal/types"
 )
@@ -82,11 +87,97 @@ func (a *Activities) QueryPrometheus(ctx context.Context, identity types.Inciden
 	return result, nil
 }
 
-// QueryKubernetesAPI fetches pod states, events, and exit codes.
+// QueryKubernetesAPI fetches pod states, events, and exit codes using client-go.
 func QueryKubernetesAPI(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.KubernetesResult, error) {
-	// Implementation uses client-go — see client/k8s.go
-	// Stub: returns unavailable if not wired
-	return types.KubernetesResult{Available: false, Error: "not implemented"}, nil
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return types.KubernetesResult{Available: false, Error: fmt.Sprintf("in-cluster config: %v", err)}, nil
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return types.KubernetesResult{Available: false, Error: fmt.Sprintf("create client: %v", err)}, nil
+	}
+
+	result := types.KubernetesResult{Available: true}
+
+	// List pods matching the workload
+	var labelSelector string
+	switch identity.Kind {
+	case "Deployment":
+		labelSelector = fmt.Sprintf("app=%s", identity.Name)
+	case "StatefulSet":
+		labelSelector = fmt.Sprintf("app=%s", identity.Name)
+	case "DaemonSet":
+		labelSelector = fmt.Sprintf("app=%s", identity.Name)
+	default:
+		labelSelector = ""
+	}
+
+	pods, err := clientset.CoreV1().Pods(identity.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+		Limit:         10,
+	})
+	if err != nil {
+		return types.KubernetesResult{Available: false, Error: fmt.Sprintf("list pods: %v", err)}, nil
+	}
+
+	for _, pod := range pods.Items {
+		result.PodPhase = string(pod.Status.Phase)
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.State.Waiting != nil {
+				result.ContainerStates = append(result.ContainerStates,
+					fmt.Sprintf("%s: waiting (%s: %s)", cs.Name, cs.State.Waiting.Reason, cs.State.Waiting.Message))
+			} else if cs.State.Terminated != nil {
+				result.ContainerStates = append(result.ContainerStates,
+					fmt.Sprintf("%s: terminated (exit=%d, reason=%s)", cs.Name, cs.State.Terminated.ExitCode, cs.State.Terminated.Reason))
+				result.ExitCodes = append(result.ExitCodes, cs.State.Terminated.ExitCode)
+			} else if cs.State.Running != nil && cs.RestartCount > 0 {
+				result.ContainerStates = append(result.ContainerStates,
+					fmt.Sprintf("%s: running (restarts=%d)", cs.Name, cs.RestartCount))
+			}
+			if cs.LastTerminationState.Terminated != nil {
+				result.ExitCodes = append(result.ExitCodes, cs.LastTerminationState.Terminated.ExitCode)
+			}
+		}
+	}
+
+	// Get recent events for the workload
+	events, err := clientset.CoreV1().Events(identity.Namespace).List(ctx, metav1.ListOptions{
+		Limit: 20,
+	})
+	if err == nil {
+		fiveMinAgo := time.Now().Add(-5 * time.Minute)
+		for _, event := range events.Items {
+			// Filter to relevant events (by time and involvement)
+			eventTime := event.LastTimestamp.Time
+			if eventTime.IsZero() {
+				eventTime = event.CreationTimestamp.Time
+			}
+			if eventTime.Before(fiveMinAgo) {
+				continue
+			}
+			if event.Type == "Normal" {
+				continue
+			}
+			// Match by involved object or namespace-wide
+			if event.InvolvedObject.Name == identity.Name ||
+				(identity.Kind != "Namespace" && matchesPodPrefix(event.InvolvedObject.Name, identity.Name)) {
+				result.RecentEvents = append(result.RecentEvents,
+					fmt.Sprintf("[%s] %s: %s", event.Type, event.Reason, event.Message))
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// matchesPodPrefix checks if a pod name could belong to the workload (prefix match).
+func matchesPodPrefix(podName, workloadName string) bool {
+	if len(podName) < len(workloadName) {
+		return false
+	}
+	return podName[:len(workloadName)] == workloadName && (len(podName) == len(workloadName) || podName[len(workloadName)] == '-')
 }
 
 // QueryLoki fetches recent error logs for the affected workload.
@@ -127,10 +218,56 @@ func (a *Activities) QueryLoki(ctx context.Context, identity types.IncidentIdent
 		return types.LokiResult{Available: false, Error: fmt.Sprintf("loki returned %d", resp.StatusCode)}, nil
 	}
 
-	// Parse Loki response (simplified — extract log lines)
-	// Full implementation would parse the JSON stream response
+	// Parse Loki query_range JSON response
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
+	if err != nil {
+		return types.LokiResult{Available: false, Error: fmt.Sprintf("read body: %v", err)}, nil
+	}
+
+	var lokiResp lokiQueryResponse
+	if err := json.Unmarshal(body, &lokiResp); err != nil {
+		return types.LokiResult{Available: false, Error: fmt.Sprintf("parse response: %v", err)}, nil
+	}
+
+	if lokiResp.Status != "success" {
+		return types.LokiResult{Available: false, Error: fmt.Sprintf("loki query failed: %s", lokiResp.Status)}, nil
+	}
+
+	var errorLines []string
+	for _, stream := range lokiResp.Data.Result {
+		for _, entry := range stream.Values {
+			if len(entry) >= 2 {
+				line := entry[1]
+				errorLines = append(errorLines, line)
+				if len(errorLines) >= 50 {
+					break
+				}
+			}
+		}
+		if len(errorLines) >= 50 {
+			break
+		}
+	}
+
 	return types.LokiResult{
-		Available: true,
-		LogCount:  0, // TODO: parse response
+		Available:  true,
+		LogCount:   len(errorLines),
+		ErrorLines: errorLines,
 	}, nil
+}
+
+// lokiQueryResponse models the Loki query_range response.
+type lokiQueryResponse struct {
+	Status string       `json:"status"`
+	Data   lokiData     `json:"data"`
+}
+
+type lokiData struct {
+	ResultType string       `json:"resultType"`
+	Result     []lokiStream `json:"result"`
+}
+
+type lokiStream struct {
+	Stream map[string]string `json:"stream"`
+	Values [][]string        `json:"values"`
 }

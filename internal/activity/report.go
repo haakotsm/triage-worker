@@ -17,7 +17,12 @@ type ReportActivity struct {
 
 // StoreTriageReport persists the triage result to the reports table.
 // Uses UPSERT (ON CONFLICT) for idempotency on workflow retries.
+// Returns nil (no-op) if database is not configured.
 func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.TriageResult) error {
+	if r.DB == nil {
+		return nil
+	}
+
 	alertsJSON, err := json.Marshal(result.Report.Evidence)
 	if err != nil {
 		return fmt.Errorf("marshal evidence: %w", err)
