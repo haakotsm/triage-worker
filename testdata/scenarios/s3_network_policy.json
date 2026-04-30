@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubePodNotReady\", namespace=\"default\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "alertname": "KubePodNotReady",
+    "namespace": "default"
+  },
+  "commonLabels": {
+    "alertname": "KubePodNotReady",
+    "namespace": "default",
+    "severity": "warning",
+    "deployment": "frontend"
+  },
+  "commonAnnotations": {
+    "description": "Pod default/frontend-8d7c6f5e3-p4n2m has been in a non-ready state for 5 minutes",
+    "summary": "Pod is not ready"
+  },
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubePodNotReady",
+        "container": "frontend",
+        "namespace": "default",
+        "pod": "frontend-8d7c6f5e3-p4n2m",
+        "deployment": "frontend",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "Pod default/frontend-8d7c6f5e3-p4n2m is failing readiness probe. Connection refused on port 8080. Possible NetworkPolicy blocking ingress.",
+        "summary": "Pod is not ready - connection refused"
+      },
+      "startsAt": "2024-01-15T10:10:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_status_ready",
+      "fingerprint": "s3-network-001"
+    }
+  ]
+}

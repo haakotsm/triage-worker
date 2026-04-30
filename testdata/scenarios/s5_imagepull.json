@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubeContainerImagePullFailed\", namespace=\"staging\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "alertname": "KubeContainerImagePullFailed",
+    "namespace": "staging"
+  },
+  "commonLabels": {
+    "alertname": "KubeContainerImagePullFailed",
+    "namespace": "staging",
+    "severity": "warning",
+    "deployment": "frontend"
+  },
+  "commonAnnotations": {
+    "description": "Container image pull failed",
+    "summary": "Image pull back-off"
+  },
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubeContainerImagePullFailed",
+        "container": "frontend",
+        "namespace": "staging",
+        "pod": "frontend-canary-2b3c4d5-r6s7t",
+        "deployment": "frontend",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "Failed to pull image 'ghcr.io/haakotsm/bodils-bibliotek:v1.2.3-rc1': manifest unknown",
+        "summary": "Image ghcr.io/haakotsm/bodils-bibliotek:v1.2.3-rc1 not found"
+      },
+      "startsAt": "2024-01-15T10:20:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_container_status_waiting_reason",
+      "fingerprint": "s5-imagepull-001"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubeNodeNotReady\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "alertname": "KubeNodeNotReady"
+  },
+  "commonLabels": {
+    "alertname": "KubeNodeNotReady",
+    "severity": "critical"
+  },
+  "commonAnnotations": {
+    "description": "Node has been unready for more than 5 minutes",
+    "summary": "Node not ready"
+  },
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubeNodeNotReady",
+        "node": "k3d-bibliotek-agent-1",
+        "severity": "critical"
+      },
+      "annotations": {
+        "description": "Node k3d-bibliotek-agent-1 has been unready for more than 5 minutes. Memory pressure detected: 95% usage.",
+        "summary": "Node not ready due to resource exhaustion"
+      },
+      "startsAt": "2024-01-15T10:25:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_node_status_condition",
+      "fingerprint": "s6-resource-001"
+    },
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "NodeMemoryHighUtilization",
+        "node": "k3d-bibliotek-agent-1",
+        "namespace": "monitoring",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "Node k3d-bibliotek-agent-1 memory utilization is 95.2%, above threshold of 85%",
+        "summary": "Node memory pressure"
+      },
+      "startsAt": "2024-01-15T10:24:30.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=node_memory_MemAvailable_bytes",
+      "fingerprint": "s6-resource-002"
+    }
+  ]
+}

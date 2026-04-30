@@ -1,0 +1,90 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{namespace=\"default\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "namespace": "default"
+  },
+  "commonLabels": {
+    "namespace": "default",
+    "severity": "critical"
+  },
+  "commonAnnotations": {},
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "PostgreSQLDown",
+        "namespace": "default",
+        "statefulset": "postgresql",
+        "pod": "postgresql-0",
+        "severity": "critical"
+      },
+      "annotations": {
+        "description": "PostgreSQL primary pod postgresql-0 is not responding to health checks",
+        "summary": "PostgreSQL is down"
+      },
+      "startsAt": "2024-01-15T10:15:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=pg_up",
+      "fingerprint": "s4-cascade-pg-001"
+    },
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubePodCrashLooping",
+        "namespace": "default",
+        "deployment": "catalog-api",
+        "pod": "catalog-api-7d8b9f6c4-x2k9j",
+        "severity": "critical"
+      },
+      "annotations": {
+        "description": "Pod catalog-api-7d8b9f6c4-x2k9j crash looping: exit code 1, message 'connection refused to postgresql:5432'",
+        "summary": "Pod crash looping due to DB connection failure"
+      },
+      "startsAt": "2024-01-15T10:15:30.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_container_status_waiting_reason",
+      "fingerprint": "s4-cascade-catalog-001"
+    },
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubePodCrashLooping",
+        "namespace": "default",
+        "deployment": "members-api",
+        "pod": "members-api-5f8c9d6b2-m3j7k",
+        "severity": "critical"
+      },
+      "annotations": {
+        "description": "Pod members-api-5f8c9d6b2-m3j7k crash looping: exit code 1, message 'connection refused to postgresql:5432'",
+        "summary": "Pod crash looping due to DB connection failure"
+      },
+      "startsAt": "2024-01-15T10:15:45.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_container_status_waiting_reason",
+      "fingerprint": "s4-cascade-members-001"
+    },
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "HighErrorRate",
+        "namespace": "default",
+        "deployment": "api-gateway",
+        "pod": "api-gateway-3a4b5c6d7-q8r9s",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "API gateway returning 503 errors at 95% rate for /api/v1/books and /api/v1/members",
+        "summary": "High error rate on API gateway"
+      },
+      "startsAt": "2024-01-15T10:16:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=http_requests_total",
+      "fingerprint": "s4-cascade-gateway-001"
+    }
+  ]
+}
