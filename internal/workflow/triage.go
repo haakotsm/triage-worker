@@ -115,6 +115,10 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		SeverityKey.ValueSet(report.Severity),
 	)
 
+	// --- Step 3.5: Append L1 diagnostic commands ---
+	l1Cmds := types.L1Commands(report.Classification, params.Identity)
+	report.Recommendations = append(report.Recommendations, l1Cmds...)
+
 	// --- Step 4: Store report ---
 	reportOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 15 * time.Second,
