@@ -51,6 +51,12 @@ Alertmanager → webhook/handler.go → Temporal SignalWithStart
 # Build
 go build -o triage-worker ./cmd/worker
 
+# Test
+go test ./...
+
+# Test with race detector
+go test -race -count=1 ./...
+
 # Run locally (requires Temporal and services)
 export TEMPORAL_ADDRESS=localhost:7233
 export DATABASE_URL=postgres://user:pass@localhost:5432/triage?sslmode=disable
@@ -59,6 +65,24 @@ export DATABASE_URL=postgres://user:pass@localhost:5432/triage?sslmode=disable
 # Docker
 docker build -t triage-worker .
 docker run -p 8080:8080 triage-worker
+```
+
+## Test Scenarios
+
+| ID | File | Scenario | Validates |
+|----|------|----------|-----------|
+| S1 | `testdata/scenarios/s1_crashloop.json` | CrashLoopBackOff | Single alert classification |
+| S2 | `testdata/scenarios/s2_oom.json` | OOMKilled | Memory metric correlation |
+| S3 | `testdata/scenarios/s3_network_policy.json` | NetworkPolicy block | Policy identification |
+| S4 | `testdata/scenarios/s4_cascade.json` | Cascading DB failure | **Multi-alert correlation** |
+| S5 | `testdata/scenarios/s5_imagepull.json` | ImagePullBackOff | Event parsing |
+| S6 | `testdata/scenarios/s6_resource_exhaustion.json` | Node resource pressure | Node-level diagnosis |
+
+To test manually with curl:
+```bash
+curl -X POST http://localhost:8080/webhook \
+  -H "Content-Type: application/json" \
+  -d @testdata/scenarios/s1_crashloop.json
 ```
 
 ## API
@@ -81,6 +105,62 @@ Readiness probe — returns 200 only when Temporal is reachable.
 - Read-only RBAC — no write access to the cluster
 - NetworkPolicy blocks direct kagent access (must go through agentgateway)
 - Input sanitization on all telemetry data before passing to agent
+- Body size limit (1MB) on webhook endpoint
+- Non-retryable error classification prevents infinite retry loops
+
+## Operator Guide
+
+### Prerequisites
+
+Before deploying, ensure:
+1. **Temporal** running with `k8s-triage` task queue (auto-created on worker start)
+2. **kagent** with `error-triage-agent` Agent CRD deployed
+3. **agentgateway** with triage HTTPRoute and policy
+4. **Keycloak** with `triage-worker` client (client-credentials grant)
+5. **PostgreSQL** accessible with `triage` schema permissions
+
+### Pre-register Search Attributes
+
+```bash
+temporal operator search-attribute create \
+  --name TriageNamespace --type Text \
+  --name TriageWorkload --type Text \
+  --name TriageClassification --type Text \
+  --name TriageSeverity --type Text
+```
+
+### Deployment
+
+Deployed via ArgoCD from `ops/argocd/platform/kagent/triage/`. Manifests:
+- `deployment.yaml` — Worker Deployment + Service
+- `agent.yaml` — kagent Agent CRD
+- `rbac.yaml` — ServiceAccount + ClusterRole (read-only)
+- `network-policy.yaml` — Egress restrictions
+
+### Monitoring
+
+- **Temporal UI**: `http://temporal.localhost` → search by TaskQueue `k8s-triage`
+- **Health probe**: `GET :8080/readyz` — checks Temporal connectivity
+- **Logs**: structured JSON with `component`, `workflow_id`, `namespace`
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| /readyz returns 503 | Temporal unreachable | Check `temporal-frontend.temporal.svc:7233` |
+| Webhook returns 500 | SignalWithStart failed | Check worker logs, Temporal health |
+| Agent returns ParseError | LLM output not valid JSON | Check agent system prompt, model size |
+| Auth rejected (401) | Token expired or wrong client | Check Keycloak `triage-worker` client secret |
+| Rate limited (429) | Too many A2A calls | Check agentgateway policy rate limit |
+
+### Progressive Automation Levels
+
+| Level | Behavior | Status |
+|-------|----------|--------|
+| L0 Inform | Triage report only | ✅ Active |
+| L1 Suggest | Report + diagnostic kubectl commands | ✅ Active |
+| L2 Assist | Auto-execute read diagnostics | 🔮 Future |
+| L3 Remediate | Safe fixes with human approval | 🔮 Future |
 
 ## License
 
