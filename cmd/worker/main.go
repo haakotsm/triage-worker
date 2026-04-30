@@ -1,0 +1,232 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	_ "github.com/lib/pq"
+	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
+
+	"github.com/haakotsm/triage-worker/internal/activity"
+	"github.com/haakotsm/triage-worker/internal/auth"
+	"github.com/haakotsm/triage-worker/internal/webhook"
+	"github.com/haakotsm/triage-worker/internal/workflow"
+)
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: parseLogLevel(getEnv("LOG_LEVEL", "info")),
+	}))
+	slog.SetDefault(logger)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if err := run(ctx, logger); err != nil {
+		logger.Error("fatal error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, logger *slog.Logger) error {
+	// --- Configuration ---
+	temporalAddr := getEnv("TEMPORAL_ADDRESS", "temporal-frontend.temporal.svc.cluster.local:7233")
+	temporalNS := getEnv("TEMPORAL_NAMESPACE", "default")
+	taskQueue := getEnv("TEMPORAL_TASK_QUEUE", "k8s-triage")
+	agentURL := getEnv("KAGENT_A2A_URL", "http://agentgateway.agentgateway.svc.cluster.local:3001")
+	agentNS := getEnv("KAGENT_AGENT_NAMESPACE", "kagent")
+	agentName := getEnv("KAGENT_AGENT_NAME", "error-triage-agent")
+	prometheusURL := getEnv("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090")
+	lokiURL := getEnv("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
+	keycloakTokenURL := getEnv("KEYCLOAK_TOKEN_URL", "http://keycloak.keycloak.svc.cluster.local/realms/bibliotek/protocol/openid-connect/token")
+	keycloakClientID := getEnv("KEYCLOAK_CLIENT_ID", "triage-worker")
+	keycloakClientSecret := getEnv("KEYCLOAK_CLIENT_SECRET", "")
+	databaseURL := getEnv("DATABASE_URL", "")
+	listenAddr := getEnv("LISTEN_ADDR", ":8080")
+
+	fullAgentURL := fmt.Sprintf("%s/api/a2a/%s/%s", agentURL, agentNS, agentName)
+
+	// --- Database ---
+	var db *sql.DB
+	if databaseURL != "" {
+		var err error
+		db, err = sql.Open("postgres", databaseURL)
+		if err != nil {
+			return fmt.Errorf("open database: %w", err)
+		}
+		defer db.Close()
+
+		db.SetMaxOpenConns(5)
+		db.SetMaxIdleConns(2)
+		db.SetConnMaxLifetime(5 * time.Minute)
+
+		if err := activity.MigrateSchema(ctx, db); err != nil {
+			return fmt.Errorf("migrate schema: %w", err)
+		}
+		logger.Info("database connected and migrated")
+	} else {
+		logger.Warn("DATABASE_URL not set — reports will not be persisted")
+	}
+
+	// --- Temporal Client ---
+	tc, err := client.Dial(client.Options{
+		HostPort:  temporalAddr,
+		Namespace: temporalNS,
+		Logger:    newTemporalLogger(logger),
+	})
+	if err != nil {
+		return fmt.Errorf("connect to temporal: %w", err)
+	}
+	defer tc.Close()
+	logger.Info("temporal connected", "address", temporalAddr, "namespace", temporalNS)
+
+	// --- OAuth2 Token Provider ---
+	tokenProvider := auth.NewTokenProvider(keycloakTokenURL, keycloakClientID, keycloakClientSecret)
+
+	// --- Activities ---
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+
+	enrichActivities := &activity.Activities{
+		PrometheusURL: prometheusURL,
+		LokiURL:       lokiURL,
+		HTTPClient:    httpClient,
+	}
+
+	agentActivity := &activity.AgentActivity{
+		AgentURL:      fullAgentURL,
+		TokenProvider: tokenProvider,
+		HTTPClient:    &http.Client{Timeout: 120 * time.Second},
+	}
+
+	reportActivity := &activity.ReportActivity{DB: db}
+
+	// --- Temporal Worker ---
+	w := worker.New(tc, taskQueue, worker.Options{
+		MaxConcurrentActivityExecutionSize:     10,
+		MaxConcurrentWorkflowTaskExecutionSize: 10,
+	})
+
+	w.RegisterWorkflow(workflow.TriageWorkflow)
+	w.RegisterActivity(enrichActivities)
+	w.RegisterActivity(agentActivity)
+	w.RegisterActivity(reportActivity)
+	w.RegisterActivity(activity.QueryKubernetesAPI)
+
+	// --- HTTP Server (webhook + health) ---
+	handler := webhook.NewHandler(tc, taskQueue, logger)
+
+	srv := &http.Server{
+		Addr:         listenAddr,
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// --- Start ---
+	errCh := make(chan error, 2)
+
+	go func() {
+		logger.Info("starting temporal worker", "task_queue", taskQueue)
+		errCh <- w.Run(worker.InterruptCh())
+	}()
+
+	go func() {
+		logger.Info("starting HTTP server", "addr", listenAddr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("http server: %w", err)
+		}
+	}()
+
+	// --- Health check loop ---
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Verify Temporal connectivity
+				_, err := tc.CheckHealth(ctx, &client.CheckHealthRequest{})
+				handler.SetHealthy(err == nil)
+				if err != nil {
+					logger.Warn("temporal health check failed", "error", err)
+				}
+			}
+		}
+	}()
+
+	// --- Wait for shutdown ---
+	select {
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
+	case err := <-errCh:
+		if err != nil {
+			return err
+		}
+	}
+
+	// Graceful shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+
+	handler.SetHealthy(false)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("http shutdown error", "error", err)
+	}
+
+	w.Stop()
+	logger.Info("shutdown complete")
+	return nil
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// temporalLogger adapts slog to Temporal's logger interface.
+type temporalLogger struct {
+	logger *slog.Logger
+}
+
+func newTemporalLogger(l *slog.Logger) *temporalLogger {
+	return &temporalLogger{logger: l.With("component", "temporal-sdk")}
+}
+
+func (l *temporalLogger) Debug(msg string, keyvals ...interface{}) {
+	l.logger.Debug(msg, keyvals...)
+}
+func (l *temporalLogger) Info(msg string, keyvals ...interface{}) {
+	l.logger.Info(msg, keyvals...)
+}
+func (l *temporalLogger) Warn(msg string, keyvals ...interface{}) {
+	l.logger.Warn(msg, keyvals...)
+}
+func (l *temporalLogger) Error(msg string, keyvals ...interface{}) {
+	l.logger.Error(msg, keyvals...)
+}
