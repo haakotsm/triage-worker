@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubePodCrashLooping\", namespace=\"default\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "alertname": "KubePodCrashLooping",
+    "namespace": "default"
+  },
+  "commonLabels": {
+    "alertname": "KubePodCrashLooping",
+    "namespace": "default",
+    "severity": "critical",
+    "deployment": "catalog-api"
+  },
+  "commonAnnotations": {
+    "description": "Pod default/catalog-api-7d8b9f6c4-x2k9j has restarted 5 times in the last 15 minutes",
+    "summary": "Pod is crash looping"
+  },
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubePodCrashLooping",
+        "container": "catalog-api",
+        "namespace": "default",
+        "pod": "catalog-api-7d8b9f6c4-x2k9j",
+        "deployment": "catalog-api",
+        "severity": "critical"
+      },
+      "annotations": {
+        "description": "Pod default/catalog-api-7d8b9f6c4-x2k9j (catalog-api) is in waiting state (reason: CrashLoopBackOff)",
+        "summary": "Pod is crash looping"
+      },
+      "startsAt": "2024-01-15T10:00:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_container_status_waiting_reason",
+      "fingerprint": "s1-crashloop-001"
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubeContainerOOMKilled\", namespace=\"default\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "alertname": "KubeContainerOOMKilled",
+    "namespace": "default"
+  },
+  "commonLabels": {
+    "alertname": "KubeContainerOOMKilled",
+    "namespace": "default",
+    "severity": "warning",
+    "deployment": "members-api"
+  },
+  "commonAnnotations": {
+    "description": "Container members-api was OOM killed",
+    "summary": "Container killed due to OOM"
+  },
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubeContainerOOMKilled",
+        "container": "members-api",
+        "namespace": "default",
+        "pod": "members-api-5f8c9d6b2-m3j7k",
+        "deployment": "members-api",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "Container members-api in pod members-api-5f8c9d6b2-m3j7k was OOM killed. Memory limit: 256Mi, last usage: 252Mi",
+        "summary": "Container killed due to OOM"
+      },
+      "startsAt": "2024-01-15T10:05:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_container_status_last_terminated_reason",
+      "fingerprint": "s2-oom-001"
+    }
+  ]
+}
