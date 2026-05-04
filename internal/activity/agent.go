@@ -137,10 +137,10 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 		return types.TriageReport{}, err
 	}
 
-	// Parse agent response into TriageReport
+	// Parse agent response into TriageReport (retryable — LLM output is non-deterministic)
 	var report types.TriageReport
 	if err := json.Unmarshal([]byte(agentText), &report); err != nil {
-		return types.TriageReport{}, temporal.NewNonRetryableApplicationError(
+		return types.TriageReport{}, temporal.NewApplicationError(
 			fmt.Sprintf("parse agent response: %v", err), "ParseError", err)
 	}
 
@@ -157,7 +157,7 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 func readJSONRPCResponse(body io.Reader) (string, error) {
 	var a2aResp a2aResponse
 	if err := json.NewDecoder(body).Decode(&a2aResp); err != nil {
-		return "", temporal.NewNonRetryableApplicationError(
+		return "", temporal.NewApplicationError(
 			fmt.Sprintf("decode A2A response: %v", err), "ParseError", err)
 	}
 	if a2aResp.Error != nil {
@@ -190,7 +190,7 @@ func readSSEResponse(body io.Reader) (string, error) {
 			"empty SSE stream", "ParseError", nil)
 	}
 
-	// The last SSE data event should be a JSON-RPC response
+	// The last SSE data event should be a JSON-RPC response (retryable parse)
 	var a2aResp a2aResponse
 	if err := json.Unmarshal([]byte(lastData), &a2aResp); err != nil {
 		// Maybe it's just the text directly
