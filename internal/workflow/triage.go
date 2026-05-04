@@ -93,7 +93,6 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 			BackoffCoefficient: 2.0,
 			MaximumAttempts:    3,
 			NonRetryableErrorTypes: []string{
-				"ParseError",
 				"AuthError",
 				"ClientError",
 			},
