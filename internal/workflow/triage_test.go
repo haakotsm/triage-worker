@@ -21,11 +21,12 @@ func TestTriageWorkflow_SingleAlert(t *testing.T) {
 	var enrichAct *activity.Activities
 	var agentAct *activity.AgentActivity
 	var reportAct *activity.ReportActivity
+	var k8sAct *activity.K8sActivity
 
 	env.RegisterActivity(enrichAct)
 	env.RegisterActivity(agentAct)
 	env.RegisterActivity(reportAct)
-	env.RegisterActivity(activity.QueryKubernetesAPI)
+	env.RegisterActivity(k8sAct)
 
 	// Send alert signal before workflow starts (simulates SignalWithStart)
 	env.RegisterDelayedCallback(func() {
@@ -54,7 +55,7 @@ func TestTriageWorkflow_SingleAlert(t *testing.T) {
 			CPUUsage:    0.2,
 		}, nil)
 
-	env.OnActivity(activity.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
+	env.OnActivity(k8sAct.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.KubernetesResult{
 			Available:    true,
 			PodPhase:     "Running",
@@ -126,11 +127,12 @@ func TestTriageWorkflow_MultipleAlerts(t *testing.T) {
 	var enrichAct *activity.Activities
 	var agentAct *activity.AgentActivity
 	var reportAct *activity.ReportActivity
+	var k8sAct *activity.K8sActivity
 
 	env.RegisterActivity(enrichAct)
 	env.RegisterActivity(agentAct)
 	env.RegisterActivity(reportAct)
-	env.RegisterActivity(activity.QueryKubernetesAPI)
+	env.RegisterActivity(k8sAct)
 
 	// Send first alert immediately
 	env.RegisterDelayedCallback(func() {
@@ -155,7 +157,7 @@ func TestTriageWorkflow_MultipleAlerts(t *testing.T) {
 	// Mock activities
 	env.OnActivity(enrichAct.QueryPrometheus, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.PrometheusResult{Available: true}, nil)
-	env.OnActivity(activity.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
+	env.OnActivity(k8sAct.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.KubernetesResult{Available: true}, nil)
 	env.OnActivity(enrichAct.QueryLoki, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.LokiResult{Available: true}, nil)
@@ -194,11 +196,12 @@ func TestTriageWorkflow_DeduplicatesAlerts(t *testing.T) {
 	var enrichAct *activity.Activities
 	var agentAct *activity.AgentActivity
 	var reportAct *activity.ReportActivity
+	var k8sAct *activity.K8sActivity
 
 	env.RegisterActivity(enrichAct)
 	env.RegisterActivity(agentAct)
 	env.RegisterActivity(reportAct)
-	env.RegisterActivity(activity.QueryKubernetesAPI)
+	env.RegisterActivity(k8sAct)
 
 	// Send same fingerprint twice
 	env.RegisterDelayedCallback(func() {
@@ -221,7 +224,7 @@ func TestTriageWorkflow_DeduplicatesAlerts(t *testing.T) {
 
 	env.OnActivity(enrichAct.QueryPrometheus, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.PrometheusResult{Available: true}, nil)
-	env.OnActivity(activity.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
+	env.OnActivity(k8sAct.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.KubernetesResult{Available: true}, nil)
 	env.OnActivity(enrichAct.QueryLoki, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.LokiResult{Available: true}, nil)
@@ -251,11 +254,12 @@ func TestTriageWorkflow_EnrichmentPartialFailure(t *testing.T) {
 	var enrichAct *activity.Activities
 	var agentAct *activity.AgentActivity
 	var reportAct *activity.ReportActivity
+	var k8sAct *activity.K8sActivity
 
 	env.RegisterActivity(enrichAct)
 	env.RegisterActivity(agentAct)
 	env.RegisterActivity(reportAct)
-	env.RegisterActivity(activity.QueryKubernetesAPI)
+	env.RegisterActivity(k8sAct)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(AlertSignalName, types.Alert{
@@ -269,7 +273,7 @@ func TestTriageWorkflow_EnrichmentPartialFailure(t *testing.T) {
 	// Prometheus succeeds, K8s fails, Loki fails
 	env.OnActivity(enrichAct.QueryPrometheus, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.PrometheusResult{Available: true, RestartRate: 3.0}, nil)
-	env.OnActivity(activity.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
+	env.OnActivity(k8sAct.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.KubernetesResult{}, fmt.Errorf("k8s api timeout"))
 	env.OnActivity(enrichAct.QueryLoki, mock.Anything, mock.Anything, mock.Anything).Return(
 		types.LokiResult{}, fmt.Errorf("loki connection refused"))

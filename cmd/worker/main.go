@@ -19,6 +19,9 @@ import (
 	"github.com/haakotsm/triage-worker/internal/auth"
 	"github.com/haakotsm/triage-worker/internal/webhook"
 	"github.com/haakotsm/triage-worker/internal/workflow"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 func main() {
@@ -77,6 +80,21 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		logger.Warn("DATABASE_URL not set — reports will not be persisted")
 	}
 
+	// --- Kubernetes Client (reused across activity invocations) ---
+	k8sConfig, err := rest.InClusterConfig()
+	if err != nil {
+		logger.Warn("k8s in-cluster config unavailable — K8s enrichment will be disabled", "error", err)
+	}
+	var k8sClientset kubernetes.Interface
+	if k8sConfig != nil {
+		k8sClientset, err = kubernetes.NewForConfig(k8sConfig)
+		if err != nil {
+			return fmt.Errorf("create k8s clientset: %w", err)
+		}
+		logger.Info("kubernetes client initialized")
+	}
+	k8sActivity := &activity.K8sActivity{Clientset: k8sClientset}
+
 	// --- Temporal Client ---
 	tc, err := client.Dial(client.Options{
 		HostPort:  temporalAddr,
@@ -119,7 +137,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	w.RegisterActivity(enrichActivities)
 	w.RegisterActivity(agentActivity)
 	w.RegisterActivity(reportActivity)
-	w.RegisterActivity(activity.QueryKubernetesAPI)
+	w.RegisterActivity(k8sActivity)
 
 	// --- HTTP Server (webhook + health) ---
 	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret)

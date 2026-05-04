@@ -13,7 +13,6 @@ import (
 	"github.com/prometheus/common/model"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	"github.com/haakotsm/triage-worker/internal/types"
 )
@@ -87,17 +86,14 @@ func (a *Activities) QueryPrometheus(ctx context.Context, identity types.Inciden
 	return result, nil
 }
 
-// QueryKubernetesAPI fetches pod states, events, and exit codes using client-go.
-func QueryKubernetesAPI(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.KubernetesResult, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return types.KubernetesResult{Available: false, Error: fmt.Sprintf("in-cluster config: %v", err)}, nil
-	}
+// K8sActivity holds a reusable Kubernetes clientset to avoid per-call TLS/discovery overhead.
+type K8sActivity struct {
+	Clientset kubernetes.Interface
+}
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return types.KubernetesResult{Available: false, Error: fmt.Sprintf("create client: %v", err)}, nil
-	}
+// QueryKubernetesAPI fetches pod states, events, and exit codes using client-go.
+func (k *K8sActivity) QueryKubernetesAPI(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.KubernetesResult, error) {
+	clientset := k.Clientset
 
 	result := types.KubernetesResult{Available: true}
 

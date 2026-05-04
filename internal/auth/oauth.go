@@ -48,8 +48,10 @@ func (p *TokenProvider) Token(ctx context.Context) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Return cached token if still valid (with 30s buffer)
-	if p.token != "" && time.Now().Add(30*time.Second).Before(p.expAt) {
+	// Return cached token if still valid.
+	// Buffer must exceed the longest activity timeout (120s for agent calls)
+	// to prevent mid-request token expiry.
+	if p.token != "" && time.Now().Add(150*time.Second).Before(p.expAt) {
 		return p.token, nil
 	}
 

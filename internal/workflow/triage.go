@@ -32,6 +32,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	var enrichAct *activity.Activities
 	var agentAct *activity.AgentActivity
 	var reportAct *activity.ReportActivity
+	var k8sAct *activity.K8sActivity
 
 	// --- Step 1: Correlate alerts ---
 	alerts, err := correlateAlerts(ctx)
@@ -62,7 +63,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	var lokiResult types.LokiResult
 
 	promFuture := workflow.ExecuteActivity(enrichCtx, enrichAct.QueryPrometheus, params.Identity, alerts)
-	k8sFuture := workflow.ExecuteActivity(enrichCtx, activity.QueryKubernetesAPI, params.Identity, alerts)
+	k8sFuture := workflow.ExecuteActivity(enrichCtx, k8sAct.QueryKubernetesAPI, params.Identity, alerts)
 	lokiFuture := workflow.ExecuteActivity(enrichCtx, enrichAct.QueryLoki, params.Identity, alerts)
 
 	// Collect results; partial failures are acceptable
