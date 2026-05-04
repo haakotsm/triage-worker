@@ -119,6 +119,7 @@ func TestHandler_WebhookUnhealthy(t *testing.T) {
 
 	body := `{"version":"4","groupKey":"test","alerts":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -135,6 +136,7 @@ func TestHandler_WebhookInvalidJSON(t *testing.T) {
 	h.healthy.Store(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -161,6 +163,7 @@ func TestHandler_WebhookResolvedOnly(t *testing.T) {
 
 	body, _ := json.Marshal(alertGroup)
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -175,6 +178,87 @@ func TestHandler_WebhookResolvedOnly(t *testing.T) {
 	}
 	if resp["reason"] != "resolved_only" {
 		t.Errorf("response reason = %q, want %q", resp["reason"], "resolved_only")
+	}
+}
+
+func TestHandler_WebhookMissingContentType(t *testing.T) {
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+	}
+	h.healthy.Store(true)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
+func TestHandler_WebhookAuthRequired(t *testing.T) {
+	h := &Handler{
+		logger:        newTestLogger(),
+		healthy:       &atomic.Bool{},
+		webhookSecret: "test-secret-token",
+	}
+	h.healthy.Store(true)
+
+	// No auth header — should be rejected
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no auth: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+
+	// Wrong token
+	req = httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("wrong token: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+
+	// Correct token — should pass auth (will fail on JSON parse, which is expected)
+	req = httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-secret-token")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("correct token: status = %d, want %d (bad JSON)", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandler_WebhookAuthSkippedWhenNoSecret(t *testing.T) {
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		// webhookSecret is empty — auth should be skipped
+	}
+	h.healthy.Store(true)
+
+	alertGroup := types.AlertGroup{
+		Version: "4",
+		Status:  "resolved",
+		Alerts:  []types.Alert{{Status: "resolved", Fingerprint: "x", Labels: map[string]string{"alertname": "Test"}}},
+	}
+	body, _ := json.Marshal(alertGroup)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (auth should be skipped)", w.Code, http.StatusOK)
 	}
 }
 

@@ -2,12 +2,15 @@ package webhook
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
@@ -24,17 +27,23 @@ type Handler struct {
 	taskQueue      string
 	logger         *slog.Logger
 	healthy        *atomic.Bool
+	webhookSecret  string
 }
 
 // NewHandler creates a new webhook handler.
-func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger) *Handler {
+// If webhookSecret is non-empty, Bearer token authentication is required on /webhook.
+func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string) *Handler {
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
+	if webhookSecret == "" {
+		logger.Warn("WEBHOOK_SECRET not set — webhook endpoint is unauthenticated")
+	}
 	return &Handler{
 		temporalClient: tc,
 		taskQueue:      taskQueue,
 		logger:         logger,
 		healthy:        healthy,
+		webhookSecret:  webhookSecret,
 	}
 }
 
@@ -63,9 +72,26 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Authenticate — require Bearer token if secret is configured
+	if h.webhookSecret != "" {
+		auth := r.Header.Get("Authorization")
+		token := strings.TrimPrefix(auth, "Bearer ")
+		if auth == token || subtle.ConstantTimeCompare([]byte(token), []byte(h.webhookSecret)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	// Check health — reject if Temporal is unreachable
 	if !h.healthy.Load() {
 		http.Error(w, "service unavailable: Temporal unreachable", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Validate Content-Type
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
@@ -135,8 +161,9 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity types.IncidentIdentity, alerts []types.Alert) error {
 	opts := client.StartWorkflowOptions{
-		ID:        wfID,
-		TaskQueue: h.taskQueue,
+		ID:                       wfID,
+		TaskQueue:                h.taskQueue,
+		WorkflowExecutionTimeout: 15 * time.Minute,
 		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 	}
 

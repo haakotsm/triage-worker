@@ -50,6 +50,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	keycloakClientID := getEnv("KEYCLOAK_CLIENT_ID", "triage-worker")
 	keycloakClientSecret := getEnv("KEYCLOAK_CLIENT_SECRET", "")
 	databaseURL := getEnv("DATABASE_URL", "")
+	webhookSecret := getEnv("WEBHOOK_SECRET", "")
 	listenAddr := getEnv("LISTEN_ADDR", ":8080")
 
 	fullAgentURL := fmt.Sprintf("%s/api/a2a/%s/%s", agentURL, agentNS, agentName)
@@ -121,7 +122,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	w.RegisterActivity(activity.QueryKubernetesAPI)
 
 	// --- HTTP Server (webhook + health) ---
-	handler := webhook.NewHandler(tc, taskQueue, logger)
+	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret)
 
 	srv := &http.Server{
 		Addr:         listenAddr,

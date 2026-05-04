@@ -88,7 +88,6 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	// --- Step 3: Invoke triage agent ---
 	agentOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 120 * time.Second,
-		HeartbeatTimeout:    30 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    5 * time.Second,
 			BackoffCoefficient: 2.0,
