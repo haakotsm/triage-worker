@@ -1,0 +1,14 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - staticcheck
+  exclusions:
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - linters: [errcheck]
+        path: _test\.go

@@ -156,7 +156,9 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		"workflows": len(alertsByWorkflow),
 		"alerts":    len(firing),
 	}
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.logger.Warn("failed to write response", "error", err)
+	}
 }
 
 func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity types.IncidentIdentity, alerts []types.Alert) error {

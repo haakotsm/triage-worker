@@ -208,16 +208,16 @@ func buildAgentPrompt(alerts []types.Alert, enrichment types.EnrichmentResult) s
 	var b strings.Builder
 
 	b.WriteString("## Correlated Alerts\n\n")
-	b.WriteString(fmt.Sprintf("Total: %d firing alerts\n\n", len(alerts)))
+	fmt.Fprintf(&b, "Total: %d firing alerts\n\n", len(alerts))
 	for i, alert := range alerts {
-		b.WriteString(fmt.Sprintf("### Alert %d: %s\n", i+1, alert.Labels["alertname"]))
-		b.WriteString(fmt.Sprintf("- Severity: %s\n", alert.Labels["severity"]))
-		b.WriteString(fmt.Sprintf("- Namespace: %s\n", alert.Labels["namespace"]))
+		fmt.Fprintf(&b, "### Alert %d: %s\n", i+1, alert.Labels["alertname"])
+		fmt.Fprintf(&b, "- Severity: %s\n", alert.Labels["severity"])
+		fmt.Fprintf(&b, "- Namespace: %s\n", alert.Labels["namespace"])
 		if pod := alert.Labels["pod"]; pod != "" {
-			b.WriteString(fmt.Sprintf("- Pod: %s\n", pod))
+			fmt.Fprintf(&b, "- Pod: %s\n", pod)
 		}
 		if desc := alert.Annotations["description"]; desc != "" {
-			b.WriteString(fmt.Sprintf("- Description: %s\n", desc))
+			fmt.Fprintf(&b, "- Description: %s\n", desc)
 		}
 		b.WriteString("\n")
 	}
@@ -227,9 +227,9 @@ func buildAgentPrompt(alerts []types.Alert, enrichment types.EnrichmentResult) s
 	// Prometheus metrics
 	if enrichment.Prometheus.Available {
 		b.WriteString("### Metrics (Prometheus)\n```\n")
-		b.WriteString(fmt.Sprintf("Restart rate (5m): %.1f\n", enrichment.Prometheus.RestartRate))
-		b.WriteString(fmt.Sprintf("Memory usage: %.1f%%\n", enrichment.Prometheus.MemoryPct))
-		b.WriteString(fmt.Sprintf("CPU usage: %.3f cores\n", enrichment.Prometheus.CPUUsage))
+		fmt.Fprintf(&b, "Restart rate (5m): %.1f\n", enrichment.Prometheus.RestartRate)
+		fmt.Fprintf(&b, "Memory usage: %.1f%%\n", enrichment.Prometheus.MemoryPct)
+		fmt.Fprintf(&b, "CPU usage: %.3f cores\n", enrichment.Prometheus.CPUUsage)
 		b.WriteString("```\n\n")
 	} else {
 		b.WriteString("### Metrics: UNAVAILABLE\n\n")
@@ -238,9 +238,9 @@ func buildAgentPrompt(alerts []types.Alert, enrichment types.EnrichmentResult) s
 	// Kubernetes state
 	if enrichment.Kubernetes.Available {
 		b.WriteString("### Kubernetes State\n```\n")
-		b.WriteString(fmt.Sprintf("Pod phase: %s\n", enrichment.Kubernetes.PodPhase))
+		fmt.Fprintf(&b, "Pod phase: %s\n", enrichment.Kubernetes.PodPhase)
 		if len(enrichment.Kubernetes.ExitCodes) > 0 {
-			b.WriteString(fmt.Sprintf("Exit codes: %v\n", enrichment.Kubernetes.ExitCodes))
+			fmt.Fprintf(&b, "Exit codes: %v\n", enrichment.Kubernetes.ExitCodes)
 		}
 		if len(enrichment.Kubernetes.RecentEvents) > 0 {
 			b.WriteString("Recent events:\n")
@@ -249,7 +249,7 @@ func buildAgentPrompt(alerts []types.Alert, enrichment types.EnrichmentResult) s
 				if len(event) > 200 {
 					event = event[:200] + "..."
 				}
-				b.WriteString(fmt.Sprintf("  - %s\n", sanitize(event)))
+				fmt.Fprintf(&b, "  - %s\n", sanitize(event))
 			}
 		}
 		b.WriteString("```\n\n")
@@ -262,7 +262,7 @@ func buildAgentPrompt(alerts []types.Alert, enrichment types.EnrichmentResult) s
 		b.WriteString("### Recent Error Logs (Loki)\n```\n")
 		for i, line := range enrichment.Loki.ErrorLines {
 			if i >= 20 { // Cap at 20 lines
-				b.WriteString(fmt.Sprintf("... (%d more lines truncated)\n", len(enrichment.Loki.ErrorLines)-20))
+				fmt.Fprintf(&b, "... (%d more lines truncated)\n", len(enrichment.Loki.ErrorLines)-20)
 				break
 			}
 			// Truncate individual lines and sanitize
