@@ -148,6 +148,9 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 		return types.TriageReport{}, err
 	}
 
+	// Strip markdown code fences — small LLMs often wrap JSON in ```json ... ```
+	agentText = stripMarkdownJSON(agentText)
+
 	// Parse agent response into TriageReport (retryable — LLM output is non-deterministic)
 	var report types.TriageReport
 	if err := json.Unmarshal([]byte(agentText), &report); err != nil {
@@ -232,6 +235,31 @@ func readSSEResponse(body io.Reader) (string, error) {
 		}
 	}
 	return lastData, nil
+}
+
+// stripMarkdownJSON extracts JSON from LLM responses that wrap it in markdown
+// code fences (```json ... ``` or ``` ... ```). Small models often do this.
+func stripMarkdownJSON(s string) string {
+	s = strings.TrimSpace(s)
+	// Try to find JSON object boundaries directly first
+	if strings.HasPrefix(s, "{") {
+		return s
+	}
+	// Strip ```json ... ``` or ``` ... ```
+	if idx := strings.Index(s, "```"); idx >= 0 {
+		start := idx + 3
+		// Skip optional language tag (e.g., "json")
+		if nl := strings.IndexByte(s[start:], '\n'); nl >= 0 {
+			start += nl + 1
+		}
+		if end := strings.Index(s[start:], "```"); end >= 0 {
+			extracted := strings.TrimSpace(s[start : start+end])
+			if strings.HasPrefix(extracted, "{") {
+				return extracted
+			}
+		}
+	}
+	return s
 }
 
 // buildAgentPrompt constructs the prompt sent to the triage agent.

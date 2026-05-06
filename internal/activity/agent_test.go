@@ -341,3 +341,25 @@ func TestReadJSONRPCResponse_ReaderInterface(t *testing.T) {
 		t.Errorf("text = %q, want %q", text, "ok")
 	}
 }
+
+func TestStripMarkdownJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain JSON", `{"classification":"Known"}`, `{"classification":"Known"}`},
+		{"json code fence", "```json\n{\"classification\":\"Known\"}\n```", `{"classification":"Known"}`},
+		{"bare code fence", "```\n{\"classification\":\"Known\"}\n```", `{"classification":"Known"}`},
+		{"prefix text", "Here is the analysis:\n```json\n{\"classification\":\"Known\"}\n```", `{"classification":"Known"}`},
+		{"no JSON", "Just some text", "Just some text"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripMarkdownJSON(tt.input)
+			if got != tt.want {
+				t.Errorf("stripMarkdownJSON() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
