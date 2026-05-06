@@ -122,7 +122,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	agentActivity := &activity.AgentActivity{
 		AgentURL:      fullAgentURL,
 		TokenProvider: tokenProvider,
-		HTTPClient:    &http.Client{Timeout: 120 * time.Second},
+		HTTPClient:    &http.Client{}, // no Client.Timeout — controlled by activity context deadline (300s)
 	}
 
 	reportActivity := &activity.ReportActivity{DB: db}
