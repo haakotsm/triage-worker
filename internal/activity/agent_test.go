@@ -352,6 +352,7 @@ func TestStripMarkdownJSON(t *testing.T) {
 		{"json code fence", "```json\n{\"classification\":\"Known\"}\n```", `{"classification":"Known"}`},
 		{"bare code fence", "```\n{\"classification\":\"Known\"}\n```", `{"classification":"Known"}`},
 		{"prefix text", "Here is the analysis:\n```json\n{\"classification\":\"Known\"}\n```", `{"classification":"Known"}`},
+		{"prose with embedded JSON", "The analysis is: {\"classification\":\"Known\"} that's it.", `{"classification":"Known"}`},
 		{"no JSON", "Just some text", "Just some text"},
 	}
 	for _, tt := range tests {

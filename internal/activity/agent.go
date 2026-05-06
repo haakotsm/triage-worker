@@ -185,7 +185,7 @@ func readJSONRPCResponse(body io.Reader) (string, error) {
 		return "", fmt.Errorf("A2A error %d: %s", a2aResp.Error.Code, a2aResp.Error.Message)
 	}
 	if a2aResp.Result == nil {
-		return "", temporal.NewNonRetryableApplicationError(
+		return "", temporal.NewApplicationError(
 			"empty agent response", "ParseError", nil)
 	}
 	// kagent returns result.artifacts[].parts[]
@@ -196,7 +196,7 @@ func readJSONRPCResponse(body io.Reader) (string, error) {
 	if a2aResp.Result.Message != nil && len(a2aResp.Result.Message.Parts) > 0 {
 		return a2aResp.Result.Message.Parts[0].Text, nil
 	}
-	return "", temporal.NewNonRetryableApplicationError(
+	return "", temporal.NewApplicationError(
 		"empty agent response", "ParseError", nil)
 }
 
@@ -239,9 +239,10 @@ func readSSEResponse(body io.Reader) (string, error) {
 
 // stripMarkdownJSON extracts JSON from LLM responses that wrap it in markdown
 // code fences (```json ... ``` or ``` ... ```). Small models often do this.
+// Also handles cases where the LLM prefixes/suffixes JSON with prose text.
 func stripMarkdownJSON(s string) string {
 	s = strings.TrimSpace(s)
-	// Try to find JSON object boundaries directly first
+	// Already valid JSON start
 	if strings.HasPrefix(s, "{") {
 		return s
 	}
@@ -257,6 +258,12 @@ func stripMarkdownJSON(s string) string {
 			if strings.HasPrefix(extracted, "{") {
 				return extracted
 			}
+		}
+	}
+	// Last resort: find the first '{' and last '}' — extract embedded JSON
+	if first := strings.IndexByte(s, '{'); first >= 0 {
+		if last := strings.LastIndexByte(s, '}'); last > first {
+			return s[first : last+1]
 		}
 	}
 	return s
