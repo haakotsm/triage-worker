@@ -14,7 +14,7 @@ func TestReadJSONRPCResponse_Artifacts(t *testing.T) {
 		"jsonrpc": "2.0",
 		"id": "triage-1",
 		"result": {
-			"status": "completed",
+			"status": {"state":"completed"},
 			"artifacts": [{
 				"artifactId": "a1",
 				"parts": [{"kind": "text", "text": "{\"classification\":\"CrashLoop\"}"}]
@@ -37,7 +37,7 @@ func TestReadJSONRPCResponse_MessageFallback(t *testing.T) {
 		"jsonrpc": "2.0",
 		"id": "triage-1",
 		"result": {
-			"status": "completed",
+			"status": {"state":"completed"},
 			"message": {
 				"role": "agent",
 				"parts": [{"kind": "text", "text": "{\"classification\":\"CrashLoop\"}"}]
@@ -80,7 +80,7 @@ func TestReadJSONRPCResponse_EmptyResult(t *testing.T) {
 }
 
 func TestReadJSONRPCResponse_NullMessage(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":"1","result":{"status":"completed"}}`
+	body := `{"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"}}}`
 
 	_, err := readJSONRPCResponse(strings.NewReader(body))
 	if err == nil {
@@ -89,7 +89,7 @@ func TestReadJSONRPCResponse_NullMessage(t *testing.T) {
 }
 
 func TestReadJSONRPCResponse_EmptyParts(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":"1","result":{"status":"completed","message":{"role":"agent","parts":[]}}}`
+	body := `{"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"},"message":{"role":"agent","parts":[]}}}`
 
 	_, err := readJSONRPCResponse(strings.NewReader(body))
 	if err == nil {
@@ -98,9 +98,9 @@ func TestReadJSONRPCResponse_EmptyParts(t *testing.T) {
 }
 
 func TestReadSSEResponse_Success(t *testing.T) {
-	body := `data: {"jsonrpc":"2.0","id":"1","result":{"status":"working"}}
+	body := `data: {"jsonrpc":"2.0","id":"1","result":{"status":{"state":"working"}}}
 
-data: {"jsonrpc":"2.0","id":"1","result":{"status":"completed","artifacts":[{"artifactId":"a1","parts":[{"kind":"text","text":"final result"}]}]}}
+data: {"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"},"artifacts":[{"artifactId":"a1","parts":[{"kind":"text","text":"final result"}]}]}}
 
 `
 
@@ -332,7 +332,7 @@ func TestReadSSEResponse_NonDataLines(t *testing.T) {
 
 // Interface compliance — ensure readJSONRPCResponse accepts io.Reader
 func TestReadJSONRPCResponse_ReaderInterface(t *testing.T) {
-	var r io.Reader = strings.NewReader(`{"jsonrpc":"2.0","id":"1","result":{"status":"completed","artifacts":[{"artifactId":"x","parts":[{"kind":"text","text":"ok"}]}]}}`)
+	var r io.Reader = strings.NewReader(`{"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"},"artifacts":[{"artifactId":"x","parts":[{"kind":"text","text":"ok"}]}]}}`)
 	text, err := readJSONRPCResponse(r)
 	if err != nil {
 		t.Fatal(err)

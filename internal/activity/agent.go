@@ -53,13 +53,18 @@ type a2aResponse struct {
 	Error   *a2aError    `json:"error,omitempty"`
 }
 
+type a2aTaskStatus struct {
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+}
+
 type a2aArtifact struct {
 	ArtifactID string    `json:"artifactId"`
 	Parts      []a2aPart `json:"parts"`
 }
 
 type a2aResult struct {
-	Status    string        `json:"status"`
+	Status    a2aTaskStatus `json:"status"`
 	Artifacts []a2aArtifact `json:"artifacts,omitempty"`
 	Message   *a2aMessage   `json:"message,omitempty"`
 }
