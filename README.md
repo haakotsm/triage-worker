@@ -121,12 +121,15 @@ Before deploying, ensure:
 
 ### Pre-register Search Attributes
 
+Search attributes are automatically registered by the `temporal-register-search-attributes`
+Job (deployed via ArgoCD PostSync hook). For manual registration:
+
 ```bash
 temporal operator search-attribute create \
-  --name TriageNamespace --type Text \
-  --name TriageWorkload --type Text \
-  --name TriageClassification --type Text \
-  --name TriageSeverity --type Text
+  --name TriageNamespace --type Keyword \
+  --name TriageWorkload --type Keyword \
+  --name TriageClassification --type Keyword \
+  --name TriageSeverity --type Keyword
 ```
 
 ### Deployment

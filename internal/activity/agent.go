@@ -41,7 +41,7 @@ type a2aMessage struct {
 }
 
 type a2aPart struct {
-	Type string `json:"type"`
+	Kind string `json:"kind"`
 	Text string `json:"text"`
 }
 
@@ -53,9 +53,15 @@ type a2aResponse struct {
 	Error   *a2aError    `json:"error,omitempty"`
 }
 
+type a2aArtifact struct {
+	ArtifactID string    `json:"artifactId"`
+	Parts      []a2aPart `json:"parts"`
+}
+
 type a2aResult struct {
-	Status  string     `json:"status"`
-	Message *a2aMessage `json:"message,omitempty"`
+	Status    string        `json:"status"`
+	Artifacts []a2aArtifact `json:"artifacts,omitempty"`
+	Message   *a2aMessage   `json:"message,omitempty"`
 }
 
 type a2aError struct {
@@ -84,7 +90,7 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 			Message: a2aMessage{
 				Role: "user",
 				Parts: []a2aPart{
-					{Type: "text", Text: prompt},
+					{Kind: "text", Text: prompt},
 				},
 			},
 		},
@@ -154,6 +160,7 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 }
 
 // readJSONRPCResponse reads a standard JSON-RPC response.
+// Supports both artifacts-based (kagent) and message-based (standard A2A) response formats.
 func readJSONRPCResponse(body io.Reader) (string, error) {
 	var a2aResp a2aResponse
 	if err := json.NewDecoder(body).Decode(&a2aResp); err != nil {
@@ -161,13 +168,28 @@ func readJSONRPCResponse(body io.Reader) (string, error) {
 			fmt.Sprintf("decode A2A response: %v", err), "ParseError", err)
 	}
 	if a2aResp.Error != nil {
+		// JSON-RPC client errors (-32600 to -32602) are non-retryable
+		if a2aResp.Error.Code >= -32602 && a2aResp.Error.Code <= -32600 {
+			return "", temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("A2A error %d: %s", a2aResp.Error.Code, a2aResp.Error.Message),
+				"A2AClientError", nil)
+		}
 		return "", fmt.Errorf("A2A error %d: %s", a2aResp.Error.Code, a2aResp.Error.Message)
 	}
-	if a2aResp.Result == nil || a2aResp.Result.Message == nil || len(a2aResp.Result.Message.Parts) == 0 {
+	if a2aResp.Result == nil {
 		return "", temporal.NewNonRetryableApplicationError(
 			"empty agent response", "ParseError", nil)
 	}
-	return a2aResp.Result.Message.Parts[0].Text, nil
+	// kagent returns result.artifacts[].parts[]
+	if len(a2aResp.Result.Artifacts) > 0 && len(a2aResp.Result.Artifacts[0].Parts) > 0 {
+		return a2aResp.Result.Artifacts[0].Parts[0].Text, nil
+	}
+	// Fallback: standard A2A result.message.parts[]
+	if a2aResp.Result.Message != nil && len(a2aResp.Result.Message.Parts) > 0 {
+		return a2aResp.Result.Message.Parts[0].Text, nil
+	}
+	return "", temporal.NewNonRetryableApplicationError(
+		"empty agent response", "ParseError", nil)
 }
 
 // readSSEResponse consumes an SSE stream and returns the final text content.
@@ -196,8 +218,13 @@ func readSSEResponse(body io.Reader) (string, error) {
 		// Maybe it's just the text directly
 		return lastData, nil
 	}
-	if a2aResp.Result != nil && a2aResp.Result.Message != nil && len(a2aResp.Result.Message.Parts) > 0 {
-		return a2aResp.Result.Message.Parts[0].Text, nil
+	if a2aResp.Result != nil {
+		if len(a2aResp.Result.Artifacts) > 0 && len(a2aResp.Result.Artifacts[0].Parts) > 0 {
+			return a2aResp.Result.Artifacts[0].Parts[0].Text, nil
+		}
+		if a2aResp.Result.Message != nil && len(a2aResp.Result.Message.Parts) > 0 {
+			return a2aResp.Result.Message.Parts[0].Text, nil
+		}
 	}
 	return lastData, nil
 }

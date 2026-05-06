@@ -8,7 +8,31 @@ import (
 	"github.com/haakotsm/triage-worker/internal/types"
 )
 
-func TestReadJSONRPCResponse_Success(t *testing.T) {
+func TestReadJSONRPCResponse_Artifacts(t *testing.T) {
+	// kagent returns result.artifacts[].parts[] with "kind" field
+	body := `{
+		"jsonrpc": "2.0",
+		"id": "triage-1",
+		"result": {
+			"status": "completed",
+			"artifacts": [{
+				"artifactId": "a1",
+				"parts": [{"kind": "text", "text": "{\"classification\":\"CrashLoop\"}"}]
+			}]
+		}
+	}`
+
+	text, err := readJSONRPCResponse(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("readJSONRPCResponse() error = %v", err)
+	}
+	if text != `{"classification":"CrashLoop"}` {
+		t.Errorf("text = %q, want JSON with CrashLoop", text)
+	}
+}
+
+func TestReadJSONRPCResponse_MessageFallback(t *testing.T) {
+	// Standard A2A fallback: result.message.parts[]
 	body := `{
 		"jsonrpc": "2.0",
 		"id": "triage-1",
@@ -16,7 +40,7 @@ func TestReadJSONRPCResponse_Success(t *testing.T) {
 			"status": "completed",
 			"message": {
 				"role": "agent",
-				"parts": [{"type": "text", "text": "{\"classification\":\"CrashLoop\"}"}]
+				"parts": [{"kind": "text", "text": "{\"classification\":\"CrashLoop\"}"}]
 			}
 		}
 	}`
@@ -76,7 +100,7 @@ func TestReadJSONRPCResponse_EmptyParts(t *testing.T) {
 func TestReadSSEResponse_Success(t *testing.T) {
 	body := `data: {"jsonrpc":"2.0","id":"1","result":{"status":"working"}}
 
-data: {"jsonrpc":"2.0","id":"1","result":{"status":"completed","message":{"role":"agent","parts":[{"type":"text","text":"final result"}]}}}
+data: {"jsonrpc":"2.0","id":"1","result":{"status":"completed","artifacts":[{"artifactId":"a1","parts":[{"kind":"text","text":"final result"}]}]}}
 
 `
 
@@ -308,7 +332,7 @@ func TestReadSSEResponse_NonDataLines(t *testing.T) {
 
 // Interface compliance — ensure readJSONRPCResponse accepts io.Reader
 func TestReadJSONRPCResponse_ReaderInterface(t *testing.T) {
-	var r io.Reader = strings.NewReader(`{"jsonrpc":"2.0","id":"1","result":{"status":"completed","message":{"role":"agent","parts":[{"type":"text","text":"ok"}]}}}`)
+	var r io.Reader = strings.NewReader(`{"jsonrpc":"2.0","id":"1","result":{"status":"completed","artifacts":[{"artifactId":"x","parts":[{"kind":"text","text":"ok"}]}]}}`)
 	text, err := readJSONRPCResponse(r)
 	if err != nil {
 		t.Fatal(err)
