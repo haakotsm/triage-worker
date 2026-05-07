@@ -364,3 +364,52 @@ func TestStripMarkdownJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTriageReport_FlexibleCausalChain(t *testing.T) {
+// LLM returns causal_chain as array of objects instead of strings
+input := `{
+"classification": "Config",
+"severity": "warning",
+"root_cause": "missing config",
+"causal_chain": [{"step": "pod started"}, {"step": "config not found"}],
+"evidence": [],
+"impact": {"affected_services": [], "blast_radius": "pod"},
+"recommendations": [],
+"confidence": 0.7,
+"escalation_needed": false
+}`
+report, err := parseTriageReport(input)
+if err != nil {
+t.Fatalf("parseTriageReport failed: %v", err)
+}
+if report.Classification != "Config" {
+t.Errorf("classification = %q, want Config", report.Classification)
+}
+if len(report.CausalChain) != 2 {
+t.Errorf("causal_chain length = %d, want 2", len(report.CausalChain))
+}
+}
+
+func TestParseTriageReport_StrictWorks(t *testing.T) {
+input := `{
+"classification": "OOM",
+"severity": "critical",
+"root_cause": "memory leak",
+"causal_chain": ["pod started", "memory grew", "OOMKilled"],
+"evidence": [{"observation": "OOM event", "source": "events", "strength": "strong"}],
+"impact": {"affected_services": ["svc-a"], "blast_radius": "deployment"},
+"recommendations": [{"action": "increase limits", "risk": "low"}],
+"confidence": 0.9,
+"escalation_needed": true
+}`
+report, err := parseTriageReport(input)
+if err != nil {
+t.Fatalf("parseTriageReport failed: %v", err)
+}
+if report.Classification != "OOM" {
+t.Errorf("classification = %q, want OOM", report.Classification)
+}
+if len(report.CausalChain) != 3 {
+t.Errorf("causal_chain length = %d, want 3", len(report.CausalChain))
+}
+}

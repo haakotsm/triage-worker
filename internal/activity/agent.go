@@ -151,9 +151,20 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 	// Strip markdown code fences — small LLMs often wrap JSON in ```json ... ```
 	agentText = stripMarkdownJSON(agentText)
 
-	// Parse agent response into TriageReport (retryable — LLM output is non-deterministic)
-	var report types.TriageReport
-	if err := json.Unmarshal([]byte(agentText), &report); err != nil {
+	// Parse agent response with flexible unmarshaling (LLM output is non-deterministic)
+	report, err := parseTriageReport(agentText)
+	if err != nil {
+		// Fallback: small models sometimes return plain prose instead of JSON.
+		// Create a minimal report with the raw text rather than failing entirely.
+		if len(agentText) > 20 {
+			return types.TriageReport{
+				Classification: "Unknown",
+				Severity:       "warning",
+				RootCause:      truncate(agentText, 500),
+				CausalChain:    []string{"LLM returned unstructured response"},
+				Confidence:     0.2,
+			}, nil
+		}
 		return types.TriageReport{}, temporal.NewApplicationError(
 			fmt.Sprintf("parse agent response: %v", err), "ParseError", err)
 	}
@@ -165,6 +176,57 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 	}
 
 	return report, nil
+}
+
+// parseTriageReport flexibly parses LLM JSON into a TriageReport.
+// Small models often return wrong types (objects instead of strings, etc.).
+func parseTriageReport(text string) (types.TriageReport, error) {
+	// First try strict unmarshal
+	var report types.TriageReport
+	if err := json.Unmarshal([]byte(text), &report); err == nil {
+		return report, nil
+	}
+
+	// Flexible parse: unmarshal into a map and coerce types
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		return types.TriageReport{}, fmt.Errorf("not valid JSON: %w", err)
+	}
+
+	// Re-marshal with causal_chain converted to []string
+	if cc, ok := raw["causal_chain"]; ok {
+		raw["causal_chain"] = coerceToStringSlice(cc)
+	}
+
+	// Rebuild JSON and unmarshal
+	fixed, err := json.Marshal(raw)
+	if err != nil {
+		return types.TriageReport{}, err
+	}
+	if err := json.Unmarshal(fixed, &report); err != nil {
+		return types.TriageReport{}, fmt.Errorf("parse after coercion: %w", err)
+	}
+	return report, nil
+}
+
+// coerceToStringSlice converts a JSON array of mixed types (strings or objects) to a JSON []string.
+func coerceToStringSlice(raw json.RawMessage) json.RawMessage {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return raw
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		var s string
+		if json.Unmarshal(item, &s) == nil {
+			result = append(result, s)
+			continue
+		}
+		// Object: stringify it
+		result = append(result, string(item))
+	}
+	out, _ := json.Marshal(result)
+	return out
 }
 
 // readJSONRPCResponse reads a standard JSON-RPC response.
@@ -195,6 +257,10 @@ func readJSONRPCResponse(body io.Reader) (string, error) {
 	// Fallback: standard A2A result.message.parts[]
 	if a2aResp.Result.Message != nil && len(a2aResp.Result.Message.Parts) > 0 {
 		return a2aResp.Result.Message.Parts[0].Text, nil
+	}
+	// Fallback: status.message may contain agent text (some kagent versions)
+	if a2aResp.Result.Status.Message != nil && len(a2aResp.Result.Status.Message.Parts) > 0 {
+		return a2aResp.Result.Status.Message.Parts[0].Text, nil
 	}
 	return "", temporal.NewApplicationError(
 		"empty agent response", "ParseError", nil)
@@ -357,4 +423,11 @@ func sanitize(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
 }

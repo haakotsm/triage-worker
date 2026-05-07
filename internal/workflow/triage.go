@@ -92,10 +92,11 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    5 * time.Second,
 			BackoffCoefficient: 2.0,
-			MaximumAttempts:    3,
+			MaximumAttempts:    5,
 			NonRetryableErrorTypes: []string{
 				"AuthError",
 				"ClientError",
+				"A2AClientError",
 			},
 		},
 	}
