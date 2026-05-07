@@ -54,8 +54,8 @@ type a2aResponse struct {
 }
 
 type a2aTaskStatus struct {
-	State   string `json:"state"`
-	Message string `json:"message,omitempty"`
+	State   string      `json:"state"`
+	Message *a2aMessage `json:"message,omitempty"`
 }
 
 type a2aArtifact struct {
