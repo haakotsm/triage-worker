@@ -28,11 +28,13 @@ type Handler struct {
 	logger         *slog.Logger
 	healthy        *atomic.Bool
 	webhookSecret  string
+	apiHandler     http.Handler
 }
 
 // NewHandler creates a new webhook handler.
 // If webhookSecret is non-empty, Bearer token authentication is required on /webhook.
-func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string) *Handler {
+// If apiHandler is non-nil, requests to /api/ are delegated to it.
+func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string, apiHandler http.Handler) *Handler {
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
 	if webhookSecret == "" {
@@ -44,6 +46,7 @@ func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhook
 		logger:         logger,
 		healthy:        healthy,
 		webhookSecret:  webhookSecret,
+		apiHandler:     apiHandler,
 	}
 }
 
@@ -54,13 +57,15 @@ func (h *Handler) SetHealthy(healthy bool) {
 
 // ServeHTTP routes requests to the appropriate handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case "/webhook":
+	switch {
+	case r.URL.Path == "/webhook":
 		h.handleWebhook(w, r)
-	case "/healthz":
+	case r.URL.Path == "/healthz":
 		h.handleHealthz(w, r)
-	case "/readyz":
+	case r.URL.Path == "/readyz":
 		h.handleReadyz(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/") && h.apiHandler != nil:
+		h.apiHandler.ServeHTTP(w, r)
 	default:
 		http.NotFound(w, r)
 	}

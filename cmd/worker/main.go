@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/sdk/worker"
 
 	"github.com/haakotsm/triage-worker/internal/activity"
+	triageapi "github.com/haakotsm/triage-worker/internal/api"
 	"github.com/haakotsm/triage-worker/internal/auth"
 	"github.com/haakotsm/triage-worker/internal/webhook"
 	"github.com/haakotsm/triage-worker/internal/workflow"
@@ -139,8 +140,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	w.RegisterActivity(reportActivity)
 	w.RegisterActivity(k8sActivity)
 
-	// --- HTTP Server (webhook + health) ---
-	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret)
+	// --- HTTP Server (webhook + health + API) ---
+	var apiHandler http.Handler
+	if db != nil {
+		apiHandler = triageapi.NewHandler(db, logger)
+		logger.Info("report API enabled")
+	}
+	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler)
 
 	srv := &http.Server{
 		Addr:         listenAddr,
