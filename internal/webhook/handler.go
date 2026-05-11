@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,12 +30,14 @@ type Handler struct {
 	healthy        *atomic.Bool
 	webhookSecret  string
 	apiHandler     http.Handler
+	db             *sql.DB
 }
 
 // NewHandler creates a new webhook handler.
 // If webhookSecret is non-empty, Bearer token authentication is required on /webhook.
 // If apiHandler is non-nil, requests to /api/ are delegated to it.
-func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string, apiHandler http.Handler) *Handler {
+// If db is non-nil, resolved alerts will update resolved_at on matching reports.
+func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string, apiHandler http.Handler, db *sql.DB) *Handler {
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
 	if webhookSecret == "" {
@@ -47,6 +50,7 @@ func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhook
 		healthy:        healthy,
 		webhookSecret:  webhookSecret,
 		apiHandler:     apiHandler,
+		db:             db,
 	}
 }
 
@@ -114,13 +118,24 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reject resolved-only groups — don't start new workflows for already-resolved incidents
+	// Handle resolved alerts — mark matching reports as resolved
 	firing := alertGroup.FiringAlerts()
 	if len(firing) == 0 {
-		h.logger.Debug("skipping resolved-only alert group", "group_key", alertGroup.GroupKey)
+		resolved := h.handleResolvedAlerts(r.Context(), alertGroup)
+		h.logger.Debug("processed resolved-only alert group",
+			"group_key", alertGroup.GroupKey,
+			"resolved_count", resolved,
+		)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"skipped","reason":"resolved_only"}`))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"resolved","reports_updated":%d}`, resolved)))
 		return
+	}
+
+	// Also process resolved alerts in mixed groups (firing + resolved)
+	if alertGroup.Status == "firing" {
+		if resolved := h.handleResolvedAlerts(r.Context(), alertGroup); resolved > 0 {
+			h.logger.Info("resolved reports in mixed group", "resolved_count", resolved)
+		}
 	}
 
 	// Process each firing alert — group by derived workflow ID
@@ -203,6 +218,42 @@ func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity typ
 func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
+}
+
+// handleResolvedAlerts marks reports as resolved for resolved alert groups.
+// Returns the number of reports updated.
+func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGroup) int {
+	if h.db == nil {
+		return 0
+	}
+
+	// Derive unique workflow IDs from resolved alerts only
+	seen := make(map[string]bool)
+	for _, alert := range group.Alerts {
+		if alert.Status != "resolved" {
+			continue
+		}
+		identity := types.DeriveIdentity(alert.Labels)
+		wfID := identity.WorkflowID()
+		seen[wfID] = true
+	}
+
+	updated := 0
+	for wfID := range seen {
+		result, err := h.db.ExecContext(ctx,
+			`UPDATE triage.reports SET resolved_at = NOW() WHERE workflow_id = $1 AND resolved_at IS NULL`,
+			wfID,
+		)
+		if err != nil {
+			h.logger.Error("failed to mark report resolved", "workflow_id", wfID, "error", err)
+			continue
+		}
+		if n, _ := result.RowsAffected(); n > 0 {
+			h.logger.Info("report resolved", "workflow_id", wfID)
+			updated++
+		}
+	}
+	return updated
 }
 
 func (h *Handler) handleReadyz(w http.ResponseWriter, _ *http.Request) {

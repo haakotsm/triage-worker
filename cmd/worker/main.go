@@ -146,7 +146,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		apiHandler = triageapi.NewHandler(db, logger)
 		logger.Info("report API enabled")
 	}
-	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler)
+	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, db)
 
 	srv := &http.Server{
 		Addr:         listenAddr,
