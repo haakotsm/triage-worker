@@ -171,13 +171,11 @@ func TestHandler_WebhookResolvedOnly(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var resp map[string]string
+	// Without a DB, no reports are updated but response should indicate resolution was processed
+	var resp map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["status"] != "skipped" {
-		t.Errorf("response status = %q, want %q", resp["status"], "skipped")
-	}
-	if resp["reason"] != "resolved_only" {
-		t.Errorf("response reason = %q, want %q", resp["reason"], "resolved_only")
+	if resp["status"] != "resolved" {
+		t.Errorf("response status = %q, want %q", resp["status"], "resolved")
 	}
 }
 

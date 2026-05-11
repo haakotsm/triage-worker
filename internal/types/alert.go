@@ -66,6 +66,31 @@ func SanitizeLabelValue(value string) string {
 	return safe
 }
 
+// normalizeCronJobName strips the CronJob timestamp suffix from a Job name.
+// CronJob-spawned Jobs are named "{cronjob}-{unix-timestamp}" (e.g., "cni-canary-28840860").
+// Returns the base CronJob name for stable grouping.
+func normalizeCronJobName(jobName string) string {
+	lastDash := strings.LastIndex(jobName, "-")
+	if lastDash <= 0 || lastDash == len(jobName)-1 {
+		return jobName
+	}
+	suffix := jobName[lastDash+1:]
+	// CronJob timestamps are 8-10 digit integers (Unix minutes since epoch)
+	if len(suffix) >= 8 && len(suffix) <= 10 {
+		allDigits := true
+		for _, c := range suffix {
+			if c < '0' || c > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return jobName[:lastDash]
+		}
+	}
+	return jobName
+}
+
 // Alert represents a single Alertmanager alert.
 type Alert struct {
 	Status       string            `json:"status"`
@@ -139,8 +164,14 @@ func DeriveIdentity(labels map[string]string) IncidentIdentity {
 	if name := labels["daemonset"]; name != "" {
 		return IncidentIdentity{Namespace: ns, Kind: "DaemonSet", Name: SanitizeK8sName(name), AlertName: alertName}
 	}
+	// CronJob label (set by kube-state-metrics) takes priority over job_name
+	// to group all runs of the same CronJob into one incident.
+	if name := labels["cronjob"]; name != "" {
+		return IncidentIdentity{Namespace: ns, Kind: "CronJob", Name: SanitizeK8sName(name), AlertName: alertName}
+	}
 	if name := labels["job_name"]; name != "" {
-		return IncidentIdentity{Namespace: ns, Kind: "Job", Name: SanitizeK8sName(name), AlertName: alertName}
+		// Strip CronJob timestamp suffix if present (e.g. "canary-28840860" → "canary")
+		return IncidentIdentity{Namespace: ns, Kind: "Job", Name: SanitizeK8sName(normalizeCronJobName(name)), AlertName: alertName}
 	}
 	// Fall back to pod
 	if name := labels["pod"]; name != "" {

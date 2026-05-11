@@ -63,6 +63,41 @@ func TestDeriveIdentity_DaemonSet(t *testing.T) {
 	}
 }
 
+func TestDeriveIdentity_CronJob(t *testing.T) {
+	labels := map[string]string{
+		"namespace": "cni-canary",
+		"cronjob":   "cni-health-canary",
+		"job_name":  "cni-health-canary-28840860",
+		"pod":       "cni-health-canary-28840860-abc",
+		"alertname": "KubeJobFailed",
+	}
+
+	id := DeriveIdentity(labels)
+	if id.Kind != "CronJob" {
+		t.Errorf("Kind = %q, want %q", id.Kind, "CronJob")
+	}
+	if id.Name != "cni-health-canary" {
+		t.Errorf("Name = %q, want %q", id.Name, "cni-health-canary")
+	}
+}
+
+func TestDeriveIdentity_CronJobWithoutLabel(t *testing.T) {
+	// When cronjob label is absent, fall back to job_name with timestamp normalization
+	labels := map[string]string{
+		"namespace": "batch",
+		"job_name":  "data-import-28840860",
+		"alertname": "KubeJobFailed",
+	}
+
+	id := DeriveIdentity(labels)
+	if id.Kind != "Job" {
+		t.Errorf("Kind = %q, want %q", id.Kind, "Job")
+	}
+	if id.Name != "data-import" {
+		t.Errorf("Name = %q, want %q (should strip timestamp suffix)", id.Name, "data-import")
+	}
+}
+
 func TestDeriveIdentity_Job(t *testing.T) {
 	labels := map[string]string{
 		"namespace": "batch",
@@ -272,5 +307,53 @@ func TestDeriveIdentity_InjectionPrevented(t *testing.T) {
 	}
 	if id.AlertName == labels["alertname"] {
 		t.Error("alertname should have been sanitized")
+	}
+}
+
+func TestNormalizeCronJobName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"cni-health-canary-28840860", "cni-health-canary"},   // CronJob timestamp (8 digits)
+		{"cni-health-canary-1735689600", "cni-health-canary"}, // CronJob timestamp (10 digits)
+		{"data-import", "data-import"},                         // Regular Job, no suffix
+		{"my-job-abc123", "my-job-abc123"},                     // Non-numeric suffix, keep as-is
+		{"job-12345", "job-12345"},                              // Too short to be a CronJob timestamp (5 digits)
+		{"job-1234567", "job-1234567"},                          // 7 digits, still too short
+		{"job-12345678", "job"},                                  // 8 digits, stripped
+		{"single", "single"},                                    // No dash
+		{"-12345678", "-12345678"},                               // Leading dash, lastDash = 0
+		{"a-12345678901", "a-12345678901"},                      // 11 digits, too long
+	}
+	for _, tc := range tests {
+		got := normalizeCronJobName(tc.input)
+		if got != tc.want {
+			t.Errorf("normalizeCronJobName(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestDeriveIdentity_CronJobPriority(t *testing.T) {
+	// CronJob label should take priority over job_name
+	labels := map[string]string{
+		"namespace": "batch",
+		"cronjob":   "parent-cronjob",
+		"job_name":  "parent-cronjob-28840860",
+		"alertname": "KubeJobFailed",
+	}
+
+	id := DeriveIdentity(labels)
+	if id.Kind != "CronJob" {
+		t.Errorf("Kind = %q, want %q (cronjob should take priority over job_name)", id.Kind, "CronJob")
+	}
+	if id.Name != "parent-cronjob" {
+		t.Errorf("Name = %q, want %q", id.Name, "parent-cronjob")
+	}
+
+	// Verify the workflow ID is stable regardless of which Job run triggered it
+	want := "triage/batch/CronJob/parent-cronjob/KubeJobFailed"
+	if got := id.WorkflowID(); got != want {
+		t.Errorf("WorkflowID() = %q, want %q", got, want)
 	}
 }
