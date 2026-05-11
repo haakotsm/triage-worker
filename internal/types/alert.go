@@ -67,7 +67,8 @@ func SanitizeLabelValue(value string) string {
 }
 
 // normalizeCronJobName strips the CronJob timestamp suffix from a Job name.
-// CronJob-spawned Jobs are named "{cronjob}-{unix-timestamp}" (e.g., "cni-canary-28840860").
+// CronJob-spawned Jobs are named "{cronjob}-{unix-minutes}" where the suffix
+// is scheduledTime.Unix()/60. For 2020–2040, this is 26000000–37000000.
 // Returns the base CronJob name for stable grouping.
 func normalizeCronJobName(jobName string) string {
 	lastDash := strings.LastIndex(jobName, "-")
@@ -75,18 +76,20 @@ func normalizeCronJobName(jobName string) string {
 		return jobName
 	}
 	suffix := jobName[lastDash+1:]
-	// CronJob timestamps are 8-10 digit integers (Unix minutes since epoch)
-	if len(suffix) >= 8 && len(suffix) <= 10 {
-		allDigits := true
-		for _, c := range suffix {
-			if c < '0' || c > '9' {
-				allDigits = false
-				break
-			}
+	// CronJob timestamps are exactly 8 digits in the range 26000000–40000000
+	if len(suffix) != 8 {
+		return jobName
+	}
+	val := 0
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return jobName
 		}
-		if allDigits {
-			return jobName[:lastDash]
-		}
+		val = val*10 + int(c-'0')
+	}
+	// Validate plausible CronJob timestamp range (2020-01-01 to ~2046)
+	if val >= 26000000 && val <= 40000000 {
+		return jobName[:lastDash]
 	}
 	return jobName
 }

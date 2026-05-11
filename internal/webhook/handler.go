@@ -118,7 +118,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle resolved-only groups — mark matching reports as resolved
+	// Handle resolved alerts — mark matching reports as resolved
 	firing := alertGroup.FiringAlerts()
 	if len(firing) == 0 {
 		resolved := h.handleResolvedAlerts(r.Context(), alertGroup)
@@ -129,6 +129,11 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"resolved","reports_updated":%d}`, resolved)))
 		return
+	}
+
+	// Also process resolved alerts in mixed groups (firing + resolved)
+	if alertGroup.Status == "firing" {
+		h.handleResolvedAlerts(r.Context(), alertGroup)
 	}
 
 	// Process each firing alert — group by derived workflow ID
@@ -220,9 +225,12 @@ func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGro
 		return 0
 	}
 
-	// Derive unique workflow IDs from resolved alerts
+	// Derive unique workflow IDs from resolved alerts only
 	seen := make(map[string]bool)
 	for _, alert := range group.Alerts {
+		if alert.Status != "resolved" {
+			continue
+		}
 		identity := types.DeriveIdentity(alert.Labels)
 		wfID := identity.WorkflowID()
 		seen[wfID] = true

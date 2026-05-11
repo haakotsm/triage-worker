@@ -315,16 +315,21 @@ func TestNormalizeCronJobName(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"cni-health-canary-28840860", "cni-health-canary"},   // CronJob timestamp (8 digits)
-		{"cni-health-canary-1735689600", "cni-health-canary"}, // CronJob timestamp (10 digits)
+		{"cni-health-canary-28840860", "cni-health-canary"},   // CronJob timestamp (valid range)
+		{"cni-health-canary-29641650", "cni-health-canary"},   // CronJob timestamp (valid range)
 		{"data-import", "data-import"},                         // Regular Job, no suffix
 		{"my-job-abc123", "my-job-abc123"},                     // Non-numeric suffix, keep as-is
-		{"job-12345", "job-12345"},                              // Too short to be a CronJob timestamp (5 digits)
-		{"job-1234567", "job-1234567"},                          // 7 digits, still too short
-		{"job-12345678", "job"},                                  // 8 digits, stripped
+		{"job-12345", "job-12345"},                              // Too short (5 digits)
+		{"job-1234567", "job-1234567"},                          // Too short (7 digits)
+		{"job-12345678", "job-12345678"},                        // 8 digits but below valid range (< 26000000)
+		{"job-26000000", "job"},                                  // Minimum valid CronJob timestamp
+		{"job-40000000", "job"},                                  // Maximum valid CronJob timestamp
+		{"job-40000001", "job-40000001"},                        // Above valid range
 		{"single", "single"},                                    // No dash
-		{"-12345678", "-12345678"},                               // Leading dash, lastDash = 0
-		{"a-12345678901", "a-12345678901"},                      // 11 digits, too long
+		{"-28840860", "-28840860"},                               // Leading dash, lastDash = 0
+		{"model-training-20250115", "model-training-20250115"}, // Date format, below CronJob range
+		{"migration-87654321", "migration-87654321"},            // Migration ID, above CronJob range
+		{"a-123456789", "a-123456789"},                          // 9 digits, wrong length
 	}
 	for _, tc := range tests {
 		got := normalizeCronJobName(tc.input)
