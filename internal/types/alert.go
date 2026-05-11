@@ -68,7 +68,7 @@ func SanitizeLabelValue(value string) string {
 
 // normalizeCronJobName strips the CronJob timestamp suffix from a Job name.
 // CronJob-spawned Jobs are named "{cronjob}-{unix-minutes}" where the suffix
-// is scheduledTime.Unix()/60. For 2020–2040, this is 26000000–37000000.
+// is scheduledTime.Unix()/60. For 2019–2046, this is 26000000–40000000.
 // Returns the base CronJob name for stable grouping.
 func normalizeCronJobName(jobName string) string {
 	lastDash := strings.LastIndex(jobName, "-")

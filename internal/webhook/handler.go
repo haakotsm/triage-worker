@@ -133,7 +133,9 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Also process resolved alerts in mixed groups (firing + resolved)
 	if alertGroup.Status == "firing" {
-		h.handleResolvedAlerts(r.Context(), alertGroup)
+		if resolved := h.handleResolvedAlerts(r.Context(), alertGroup); resolved > 0 {
+			h.logger.Info("resolved reports in mixed group", "resolved_count", resolved)
+		}
 	}
 
 	// Process each firing alert — group by derived workflow ID
