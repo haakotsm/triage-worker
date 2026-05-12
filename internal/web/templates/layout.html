@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Triage Dashboard</title>
   <link rel="stylesheet" href="/static/output.css">
+  <style>[x-cloak] { display: none !important; }</style>
+  <script>
+    document.documentElement.setAttribute('data-theme',
+      localStorage.getItem('theme') || 'luxury');
+  </script>
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/alpine.min.js" defer></script>
 </head>

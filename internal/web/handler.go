@@ -281,6 +281,8 @@ func (h *Handler) fetchReport(ctx context.Context, idStr string) (*Report, error
 		query += "id = $1"
 		args = []interface{}{id}
 	} else {
+		// Workflow IDs contain slashes (e.g. "triage/ns/Kind/name/alert")
+		// which are encoded as pipes in URL path segments for safe routing.
 		wfID := strings.ReplaceAll(idStr, "|", "/")
 		query += "workflow_id = $1"
 		args = []interface{}{wfID}
@@ -326,19 +328,25 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 		}
 
 		if len(causalChainJSON) > 0 {
-			_ = json.Unmarshal(causalChainJSON, &r.CausalChain)
+			if err := json.Unmarshal(causalChainJSON, &r.CausalChain); err != nil {
+				h.logger.Warn("unmarshal causal_chain", "id", r.ID, "error", err)
+			}
 		}
 		if r.CausalChain == nil {
 			r.CausalChain = []string{}
 		}
 		if len(evidenceJSON) > 0 {
-			_ = json.Unmarshal(evidenceJSON, &r.Evidence)
+			if err := json.Unmarshal(evidenceJSON, &r.Evidence); err != nil {
+				h.logger.Warn("unmarshal evidence", "id", r.ID, "error", err)
+			}
 		}
 		if r.Evidence == nil {
 			r.Evidence = []Evidence{}
 		}
 		if len(recommendationsJSON) > 0 {
-			_ = json.Unmarshal(recommendationsJSON, &r.Recommendations)
+			if err := json.Unmarshal(recommendationsJSON, &r.Recommendations); err != nil {
+				h.logger.Warn("unmarshal recommendations", "id", r.ID, "error", err)
+			}
 		}
 		if r.Recommendations == nil {
 			r.Recommendations = []Recommendation{}
@@ -445,6 +453,12 @@ func templateFuncs() template.FuncMap {
 				return "0"
 			}
 			return fmt.Sprintf("%.0f", float64(a)/float64(b)*100)
+		},
+		"pages": func(total, perPage int) int {
+			if perPage == 0 {
+				return 0
+			}
+			return (total + perPage - 1) / perPage
 		},
 	}
 }

@@ -7,13 +7,14 @@
   {{/* Filters */}}
   <div class="card bg-base-100 shadow-sm">
     <div class="card-body py-3">
-      <form hx-get="/partials/reports" hx-target="#report-list" hx-push-url="true"
+      <form hx-get="/partials/reports" hx-target="#report-list"
             class="flex flex-wrap gap-3 items-end">
         <input type="text" name="search" placeholder="Search workload, namespace, alert..."
                class="input input-bordered input-sm w-64"
                value="{{.Query}}"
                hx-get="/partials/reports" hx-trigger="keyup changed delay:300ms"
-               hx-target="#report-list">
+               hx-target="#report-list"
+               hx-include="[name='severity'],[name='status']">
         <select name="severity" class="select select-bordered select-sm"
                 hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
                 hx-include="[name='search'],[name='status']">

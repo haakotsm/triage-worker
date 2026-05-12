@@ -61,7 +61,7 @@
               hx-include="[name='search'],[name='severity'],[name='status']">«</button>
       {{end}}
       <button class="join-item btn btn-sm btn-disabled">
-        Page {{add (div .Offset .Limit) 1}} of {{add (div .TotalCount .Limit) 1}}
+        Page {{add (div .Offset .Limit) 1}} of {{pages .TotalCount .Limit}}
       </button>
       {{if lt (add .Offset .Limit) .TotalCount}}
       <button class="join-item btn btn-sm"
