@@ -21,6 +21,8 @@ type Report struct {
 	AlertName        string           `json:"alert_name"`
 	Classification   string           `json:"classification"`
 	Severity         string           `json:"severity"`
+	Summary          string           `json:"summary,omitempty"`
+	BlastRadius      string           `json:"blast_radius,omitempty"`
 	RootCause        string           `json:"root_cause"`
 	CausalChain      []string         `json:"causal_chain"`
 	Evidence         []EvidenceItem   `json:"evidence"`
@@ -43,9 +45,11 @@ type EvidenceItem struct {
 
 // Recommendation mirrors types.Recommendation for API output.
 type Recommendation struct {
-	Action  string `json:"action"`
-	Command string `json:"command,omitempty"`
-	Risk    string `json:"risk"`
+	Action   string `json:"action"`
+	Command  string `json:"command,omitempty"`
+	Risk     string `json:"risk"`
+	Source   string `json:"source,omitempty"`
+	Expected string `json:"expected,omitempty"`
 }
 
 // Handler serves the read-only triage reports API.
@@ -90,7 +94,8 @@ func (h *Handler) listReports(w http.ResponseWriter, r *http.Request) {
 	query := `SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at
+		started_at, completed_at, created_at, resolved_at,
+		summary, blast_radius
 		FROM triage.reports WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
@@ -133,11 +138,13 @@ func (h *Handler) listActiveReports(w http.ResponseWriter, r *http.Request) {
 	query := `SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at
+		started_at, completed_at, created_at, resolved_at,
+		summary, blast_radius
 		FROM triage.reports
 		WHERE resolved_at IS NULL
 		ORDER BY
 			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+			CASE blast_radius WHEN 'cluster' THEN 0 WHEN 'namespace' THEN 1 WHEN 'deployment' THEN 2 ELSE 3 END,
 			completed_at DESC
 		LIMIT 50`
 
@@ -159,7 +166,8 @@ func (h *Handler) getReport(w http.ResponseWriter, r *http.Request, idStr string
 	query := `SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at
+		started_at, completed_at, created_at, resolved_at,
+		summary, blast_radius
 		FROM triage.reports WHERE `
 
 	var args []interface{}
@@ -207,6 +215,7 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 			&causalChainJSON, &evidenceJSON, &recommendationsJSON,
 			&r.Confidence, &r.EscalationNeeded, &r.AlertCount,
 			&r.StartedAt, &r.CompletedAt, &r.CreatedAt, &resolvedAt,
+			&r.Summary, &r.BlastRadius,
 		)
 		if err != nil {
 			return nil, err

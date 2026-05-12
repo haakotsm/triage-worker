@@ -22,6 +22,9 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 	if r.DB == nil {
 		return nil
 	}
+	if result.Report == nil {
+		return fmt.Errorf("store report: report is nil for workflow %s", result.WorkflowID)
+	}
 
 	alertsJSON, err := json.Marshal(result.Report.Evidence)
 	if err != nil {
@@ -38,13 +41,19 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 		return fmt.Errorf("marshal causal chain: %w", err)
 	}
 
+	// Extract blast_radius from report impact, validated to known values.
+	blastRadius := types.ValidateBlastRadius(result.Report.Impact.BlastRadius)
+
+	summary := result.Report.Summary
+
 	query := `
 		INSERT INTO triage.reports (
 			workflow_id, namespace, workload, kind, alert_name,
 			classification, severity, root_cause, causal_chain,
 			evidence, recommendations, confidence,
-			escalation_needed, alert_count, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			escalation_needed, alert_count, started_at, completed_at,
+			summary, blast_radius
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		ON CONFLICT (workflow_id) DO UPDATE SET
 			classification = EXCLUDED.classification,
 			severity = EXCLUDED.severity,
@@ -54,7 +63,9 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 			recommendations = EXCLUDED.recommendations,
 			confidence = EXCLUDED.confidence,
 			escalation_needed = EXCLUDED.escalation_needed,
-			completed_at = EXCLUDED.completed_at
+			completed_at = EXCLUDED.completed_at,
+			summary = EXCLUDED.summary,
+			blast_radius = EXCLUDED.blast_radius
 	`
 
 	_, err = r.DB.ExecContext(ctx, query,
@@ -74,6 +85,8 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 		result.AlertCount,
 		result.StartedAt,
 		result.CompletedAt,
+		summary,
+		blastRadius,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert report: %w", err)
@@ -106,13 +119,19 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 			started_at      TIMESTAMPTZ NOT NULL,
 			completed_at    TIMESTAMPTZ NOT NULL,
 			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			resolved_at     TIMESTAMPTZ
+			resolved_at     TIMESTAMPTZ,
+			summary         TEXT NOT NULL DEFAULT '',
+			blast_radius    TEXT NOT NULL DEFAULT 'pod'
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_reports_namespace ON triage.reports (namespace);
 		CREATE INDEX IF NOT EXISTS idx_reports_classification ON triage.reports (classification);
 		CREATE INDEX IF NOT EXISTS idx_reports_severity ON triage.reports (severity);
 		CREATE INDEX IF NOT EXISTS idx_reports_created_at ON triage.reports (created_at DESC);
+
+		-- Migration: add columns if table already exists
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS blast_radius TEXT NOT NULL DEFAULT 'pod';
 	`
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)

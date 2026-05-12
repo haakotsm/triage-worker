@@ -87,15 +87,32 @@ func TestL1Commands_Unknown(t *testing.T) {
 	}
 }
 
-func TestL1Commands_AllRiskNone(t *testing.T) {
+func TestL1Commands_AllRiskNoneOrLow(t *testing.T) {
 	classifications := []string{"CrashLoop", "OOM", "Network", "ImagePull", "ResourceExhaustion", "Config", "Scheduling", "Unknown"}
 	id := IncidentIdentity{Namespace: "ns", Kind: "Deployment", Name: "app"}
 
 	for _, c := range classifications {
 		cmds := L1Commands(c, id)
 		for _, cmd := range cmds {
-			if cmd.Risk != "none" {
-				t.Errorf("classification=%q action=%q: risk=%q, want 'none'", c, cmd.Action, cmd.Risk)
+			if cmd.Risk != "none" && cmd.Risk != "low" {
+				t.Errorf("classification=%q action=%q: risk=%q, want 'none' or 'low'", c, cmd.Action, cmd.Risk)
+			}
+		}
+	}
+}
+
+func TestL1Commands_AllHaveSourceAndExpected(t *testing.T) {
+	classifications := []string{"CrashLoop", "OOM", "Network", "ImagePull", "ResourceExhaustion", "Config", "Scheduling", "Unknown"}
+	id := IncidentIdentity{Namespace: "ns", Kind: "Deployment", Name: "app"}
+
+	for _, c := range classifications {
+		cmds := L1Commands(c, id)
+		for _, cmd := range cmds {
+			if cmd.Source != "l1" {
+				t.Errorf("classification=%q action=%q: source=%q, want 'l1'", c, cmd.Action, cmd.Source)
+			}
+			if cmd.Expected == "" {
+				t.Errorf("classification=%q action=%q: expected is empty", c, cmd.Action)
 			}
 		}
 	}

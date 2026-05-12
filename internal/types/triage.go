@@ -2,7 +2,9 @@ package types
 
 // TriageReport is the structured diagnosis from the AI agent.
 // Must match the JSON schema in the agent's system prompt.
+// Note: Summary is computed post-agent, not produced by the LLM.
 type TriageReport struct {
+	Summary          string           `json:"summary,omitempty"`
 	Classification   string           `json:"classification"`
 	Severity         string           `json:"severity"`
 	RootCause        string           `json:"root_cause"`
@@ -28,10 +30,14 @@ type Impact struct {
 }
 
 // Recommendation is a specific remediation action.
+// Source and Expected are populated in Go code (L1Commands or workflow post-processing),
+// never by the LLM — the 3B model only produces Action, Command, Risk.
 type Recommendation struct {
-	Action  string `json:"action"`
-	Command string `json:"command,omitempty"`
-	Risk    string `json:"risk"` // none, low, medium
+	Action   string `json:"action"`
+	Command  string `json:"command,omitempty"`
+	Risk     string `json:"risk"`               // none, low, medium
+	Source   string `json:"source,omitempty"`    // "l1" (deterministic) or "agent" (LLM-generated)
+	Expected string `json:"expected,omitempty"`  // what to look for in command output
 }
 
 // Valid classifications (matches agent system prompt taxonomy).
