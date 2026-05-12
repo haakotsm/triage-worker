@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/haakotsm/triage-worker/internal/types"
 )
 
@@ -315,5 +316,251 @@ func TestAlertGroupFiltering(t *testing.T) {
 	// Should be 2 distinct workflows (different namespace/kind/name)
 	if len(alertsByWorkflow) != 2 {
 		t.Errorf("distinct workflows = %d, want 2", len(alertsByWorkflow))
+	}
+}
+
+// --- DB-backed integration tests for handleResolvedAlerts ---
+
+func TestHandleResolvedAlerts_UpdatesMatchingReport(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      db,
+	}
+
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{
+				Status: "resolved",
+				Labels: map[string]string{
+					"alertname":  "KubePodCrashLooping",
+					"namespace":  "production",
+					"deployment": "api-server",
+				},
+			},
+		},
+	}
+
+	// Derive the expected workflow ID
+	identity := types.DeriveIdentity(group.Alerts[0].Labels)
+	expectedWfID := identity.WorkflowID()
+
+	// Expect the UPDATE query with the correct workflow_id
+	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+		WithArgs(expectedWfID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	updated := h.handleResolvedAlerts(t.Context(), group)
+
+	if updated != 1 {
+		t.Errorf("handleResolvedAlerts() = %d, want 1", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestHandleResolvedAlerts_NoDBSkips(t *testing.T) {
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      nil,
+	}
+
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{Status: "resolved", Labels: map[string]string{"alertname": "Test", "namespace": "ns"}},
+		},
+	}
+
+	updated := h.handleResolvedAlerts(t.Context(), group)
+	if updated != 0 {
+		t.Errorf("handleResolvedAlerts() without DB = %d, want 0", updated)
+	}
+}
+
+func TestHandleResolvedAlerts_SkipsFiringAlerts(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      db,
+	}
+
+	// Mixed group: only resolved alerts should trigger UPDATE
+	group := types.AlertGroup{
+		Status: "firing",
+		Alerts: []types.Alert{
+			{
+				Status: "firing",
+				Labels: map[string]string{"alertname": "A", "namespace": "ns", "deployment": "app"},
+			},
+			{
+				Status: "firing",
+				Labels: map[string]string{"alertname": "B", "namespace": "ns", "deployment": "app"},
+			},
+		},
+	}
+
+	// No SQL should be executed — all alerts are firing
+	updated := h.handleResolvedAlerts(t.Context(), group)
+	if updated != 0 {
+		t.Errorf("handleResolvedAlerts() with only firing = %d, want 0", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestHandleResolvedAlerts_DeduplicatesWorkflowIDs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      db,
+	}
+
+	// Two resolved alerts with same alertname/namespace/deployment → same workflow ID
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{
+				Status:      "resolved",
+				Fingerprint: "f1",
+				Labels:      map[string]string{"alertname": "KubePodCrashLooping", "namespace": "ns", "deployment": "app"},
+			},
+			{
+				Status:      "resolved",
+				Fingerprint: "f2",
+				Labels:      map[string]string{"alertname": "KubePodCrashLooping", "namespace": "ns", "deployment": "app"},
+			},
+		},
+	}
+
+	// Should only execute ONE update (deduplicated by workflow ID)
+	identity := types.DeriveIdentity(group.Alerts[0].Labels)
+	expectedWfID := identity.WorkflowID()
+
+	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+		WithArgs(expectedWfID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	updated := h.handleResolvedAlerts(t.Context(), group)
+	if updated != 1 {
+		t.Errorf("handleResolvedAlerts() = %d, want 1 (deduplicated)", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestHandleResolvedAlerts_NoRowsAffected(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      db,
+	}
+
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{
+				Status: "resolved",
+				Labels: map[string]string{"alertname": "X", "namespace": "ns", "deployment": "ghost"},
+			},
+		},
+	}
+
+	identity := types.DeriveIdentity(group.Alerts[0].Labels)
+	expectedWfID := identity.WorkflowID()
+
+	// Report doesn't exist or already resolved — 0 rows affected
+	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+		WithArgs(expectedWfID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	updated := h.handleResolvedAlerts(t.Context(), group)
+	if updated != 0 {
+		t.Errorf("handleResolvedAlerts() = %d, want 0 (no matching report)", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestHandleResolvedAlerts_MultipleDistinctWorkflows(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      db,
+	}
+
+	// Two alerts with different alertnames → different workflow IDs → two UPDATEs
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{
+				Status: "resolved",
+				Labels: map[string]string{"alertname": "CrashLoop", "namespace": "ns", "deployment": "app"},
+			},
+			{
+				Status: "resolved",
+				Labels: map[string]string{"alertname": "OOMKilled", "namespace": "ns", "deployment": "app"},
+			},
+		},
+	}
+
+	id0 := types.DeriveIdentity(group.Alerts[0].Labels)
+	id1 := types.DeriveIdentity(group.Alerts[1].Labels)
+
+	// Expect two separate UPDATEs (order depends on map iteration — use AnyArg)
+	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	updated := h.handleResolvedAlerts(t.Context(), group)
+	if updated != 2 {
+		t.Errorf("handleResolvedAlerts() = %d, want 2", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+
+	// Verify the two workflow IDs are indeed different
+	if id0.WorkflowID() == id1.WorkflowID() {
+		t.Errorf("expected different workflow IDs, both = %q", id0.WorkflowID())
 	}
 }

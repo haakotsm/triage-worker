@@ -3,6 +3,7 @@ module github.com/haakotsm/triage-worker
 go 1.26.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/common v0.61.0
