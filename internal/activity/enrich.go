@@ -42,7 +42,7 @@ func (a *Activities) QueryPrometheus(ctx context.Context, identity types.Inciden
 		`increase(kube_pod_container_status_restarts_total{namespace="%s"}[5m])`,
 		identity.Namespace,
 	)
-	if identity.Kind == "Deployment" || identity.Kind == "StatefulSet" {
+	if identity.Kind == "Deployment" || identity.Kind == "StatefulSet" || identity.Kind == "App" || identity.Kind == "Pod" {
 		restartQuery = fmt.Sprintf(
 			`increase(kube_pod_container_status_restarts_total{namespace="%s", pod=~"%s-.*"}[5m])`,
 			identity.Namespace, identity.Name,
@@ -106,6 +106,8 @@ func (k *K8sActivity) QueryKubernetesAPI(ctx context.Context, identity types.Inc
 		labelSelector = fmt.Sprintf("app=%s", identity.Name)
 	case "DaemonSet":
 		labelSelector = fmt.Sprintf("app=%s", identity.Name)
+	case "App":
+		labelSelector = fmt.Sprintf("app.kubernetes.io/name=%s", identity.Name)
 	default:
 		labelSelector = ""
 	}
