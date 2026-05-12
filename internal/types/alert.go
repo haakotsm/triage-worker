@@ -11,6 +11,13 @@ var (
 	safeK8sName = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
 	// safeLabelValue matches values safe for use in PromQL/LogQL queries and shell commands.
 	safeLabelValue = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,252}$`)
+	// k8sGeneratedChars matches the Kubernetes "safe" random charset used by
+	// apimachinery/pkg/util/rand.SafeEncodeString: consonants + digits 2,4-9.
+	// Vowels (a,e,i,o,u) and digits 0,1,3 are excluded to avoid offensive words
+	// and visually ambiguous characters. This makes generated suffixes highly
+	// distinguishable from human-chosen name segments which almost always
+	// contain vowels.
+	k8sGeneratedChars = regexp.MustCompile(`^[bcdfghjklmnpqrstvwxz2456789]+$`)
 )
 
 // SanitizeK8sName validates a Kubernetes resource name against DNS label rules.
@@ -92,6 +99,78 @@ func normalizeCronJobName(jobName string) string {
 		return jobName[:lastDash]
 	}
 	return jobName
+}
+
+// normalizePodName strips Kubernetes-generated hash suffixes from a pod name
+// to recover the owning workload name. This allows grouping alerts that only
+// carry a "pod" label (no deployment/daemonset/statefulset label) by the
+// workload they belong to, eliminating per-pod incident fragmentation.
+//
+// Detection relies on Kubernetes' deliberate use of a vowel-free random
+// charset [bcdfghjklmnpqrstvwxz2456789] for generated name suffixes. Human-
+// chosen name segments almost always contain vowels, making false positives
+// extremely unlikely.
+//
+// Patterns handled:
+//
+//	Deployment:   {deploy}-{rs-hash:8-10}-{pod-hash:5}  → {deploy}
+//	DaemonSet:    {ds}-{random:5}                        → {ds}
+//	StatefulSet:  {sts}-{ordinal}                        → {sts}-{ordinal}  (preserved)
+//	Standalone:   my-pod                                 → my-pod           (preserved)
+func normalizePodName(podName string) string {
+	parts := strings.Split(podName, "-")
+	n := len(parts)
+
+	// Need at least 2 parts (base name + suffix) to strip anything.
+	if n < 2 {
+		return podName
+	}
+
+	last := parts[n-1]
+
+	// StatefulSet pods end with a numeric ordinal (e.g. "web-0", "postgres-2").
+	// Ordinals are stable identifiers — return unchanged.
+	if isNumeric(last) {
+		return podName
+	}
+
+	// Deployment pods: {deploy}-{rs-hash}-{pod-hash}
+	// The ReplicaSet template hash is 8–10 chars and the pod suffix is exactly
+	// 5 chars, both drawn from the k8s generated charset.
+	if n >= 3 && len(last) == 5 && k8sGeneratedChars.MatchString(last) {
+		secondLast := parts[n-2]
+		if len(secondLast) >= 8 && len(secondLast) <= 10 && k8sGeneratedChars.MatchString(secondLast) {
+			base := strings.Join(parts[:n-2], "-")
+			if base != "" {
+				return base
+			}
+		}
+	}
+
+	// DaemonSet / ReplicaSet pods: {name}-{random:5}
+	// The suffix is exactly 5 chars from the k8s generated charset.
+	if len(last) == 5 && k8sGeneratedChars.MatchString(last) {
+		base := strings.Join(parts[:n-1], "-")
+		if base != "" {
+			return base
+		}
+	}
+
+	// Unrecognized pattern — return unchanged for safety.
+	return podName
+}
+
+// isNumeric returns true if s is non-empty and consists entirely of digits.
+func isNumeric(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // Alert represents a single Alertmanager alert.
@@ -176,9 +255,19 @@ func DeriveIdentity(labels map[string]string) IncidentIdentity {
 		// Strip CronJob timestamp suffix if present (e.g. "canary-28840860" → "canary")
 		return IncidentIdentity{Namespace: ns, Kind: "Job", Name: SanitizeK8sName(normalizeCronJobName(name)), AlertName: alertName}
 	}
-	// Fall back to pod
+	// Check Kubernetes recommended app labels before falling to pod.
+	// These provide logical application grouping without relying on
+	// controller-specific labels that some exporters don't emit.
+	if name := labels["app.kubernetes.io/name"]; name != "" {
+		return IncidentIdentity{Namespace: ns, Kind: "App", Name: SanitizeK8sName(name), AlertName: alertName}
+	}
+	if name := labels["app"]; name != "" {
+		return IncidentIdentity{Namespace: ns, Kind: "App", Name: SanitizeK8sName(name), AlertName: alertName}
+	}
+	// Fall back to pod — normalize name to strip generated suffixes and
+	// group alerts by the owning workload instead of individual pod.
 	if name := labels["pod"]; name != "" {
-		return IncidentIdentity{Namespace: ns, Kind: "Pod", Name: SanitizeK8sName(name), AlertName: alertName}
+		return IncidentIdentity{Namespace: ns, Kind: "Pod", Name: SanitizeK8sName(normalizePodName(name)), AlertName: alertName}
 	}
 	// Namespace-level fallback
 	return IncidentIdentity{Namespace: ns, Kind: "Namespace", Name: ns, AlertName: alertName}

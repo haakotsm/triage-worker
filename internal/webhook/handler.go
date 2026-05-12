@@ -127,7 +127,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			"resolved_count", resolved,
 		)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"resolved","reports_updated":%d}`, resolved)))
+		_, _ = fmt.Fprintf(w, `{"status":"resolved","reports_updated":%d}`, resolved)
 		return
 	}
 

@@ -339,6 +339,235 @@ func TestNormalizeCronJobName(t *testing.T) {
 	}
 }
 
+func TestNormalizePodName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// ── Deployment pods: {deploy}-{rs-hash:8-10}-{pod-hash:5} ──
+		{
+			name:  "deployment pod with k8s-charset hashes",
+			input: "my-app-bc5d8fg2hj-x4mdv",
+			want:  "my-app",
+		},
+		{
+			name:  "deployment pod simple name",
+			input: "web-d8bc4g2hjk-rn5x2",
+			want:  "web",
+		},
+		{
+			name:  "deployment pod with hyphenated name",
+			input: "my-cool-app-bc5d8fg2hj-x4mdv",
+			want:  "my-cool-app",
+		},
+		{
+			name:  "deployment pod 8-char RS hash",
+			input: "api-b4d8fg2h-rn5x2",
+			want:  "api",
+		},
+		{
+			name:  "deployment pod 9-char RS hash",
+			input: "api-b4d8fg2hx-rn5x2",
+			want:  "api",
+		},
+
+		// ── DaemonSet pods: {ds}-{random:5} ──
+		{
+			name:  "daemonset pod simple name",
+			input: "node-exporter-4mdcv",
+			want:  "node-exporter",
+		},
+		{
+			name:  "daemonset pod single-segment name",
+			input: "cilium-x4m2v",
+			want:  "cilium",
+		},
+		{
+			name:  "daemonset pod multi-hyphen name",
+			input: "kube-proxy-worker-d8bc4",
+			want:  "kube-proxy-worker",
+		},
+
+		// ── StatefulSet pods: {sts}-{ordinal} — must be preserved ──
+		{
+			name:  "statefulset pod ordinal 0",
+			input: "postgres-0",
+			want:  "postgres-0",
+		},
+		{
+			name:  "statefulset pod ordinal 2",
+			input: "redis-cluster-2",
+			want:  "redis-cluster-2",
+		},
+		{
+			name:  "statefulset pod high ordinal",
+			input: "kafka-12",
+			want:  "kafka-12",
+		},
+
+		// ── Standalone / unrecognized pods — must be preserved ──
+		{
+			name:  "standalone pod no suffix",
+			input: "my-pod",
+			want:  "my-pod",
+		},
+		{
+			name:  "standalone pod with vowels in last segment",
+			input: "my-application",
+			want:  "my-application",
+		},
+		{
+			name:  "single-word pod name",
+			input: "standalone",
+			want:  "standalone",
+		},
+		{
+			name:  "suffix too short (4 chars)",
+			input: "app-bc4d",
+			want:  "app-bc4d",
+		},
+		{
+			name:  "suffix too long (6 chars)",
+			input: "app-bc4d5g",
+			want:  "app-bc4d5g",
+		},
+		{
+			name:  "suffix has vowels - not k8s generated",
+			input: "app-abcde",
+			want:  "app-abcde",
+		},
+		{
+			name:  "suffix has digit 0 - not k8s generated",
+			input: "app-b0cdf",
+			want:  "app-b0cdf",
+		},
+		{
+			name:  "suffix has digit 1 - not k8s generated",
+			input: "app-b1cdf",
+			want:  "app-b1cdf",
+		},
+		{
+			name:  "suffix has digit 3 - not k8s generated",
+			input: "app-b3cdf",
+			want:  "app-b3cdf",
+		},
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizePodName(tc.input)
+			if got != tc.want {
+				t.Errorf("normalizePodName(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizePodName_DeploymentPattern_RSHashLengths(t *testing.T) {
+	// Verify RS hash lengths 8, 9, and 10 are all accepted
+	for _, rsLen := range []int{8, 9, 10} {
+		// Build an RS hash of the right length using only k8s chars
+		rsHash := "bcdfghjkln"[:rsLen]
+		podName := "myapp-" + rsHash + "-x4m2v"
+		got := normalizePodName(podName)
+		if got != "myapp" {
+			t.Errorf("RS hash len %d: normalizePodName(%q) = %q, want %q", rsLen, podName, got, "myapp")
+		}
+	}
+
+	// RS hash of 7 chars should NOT match deployment pattern
+	podName := "myapp-bcdfghj-x4m2v"
+	got := normalizePodName(podName)
+	// Falls through to DaemonSet check on "x4m2v", strips it
+	if got != "myapp-bcdfghj" {
+		t.Errorf("RS hash len 7: normalizePodName(%q) = %q, want %q", podName, got, "myapp-bcdfghj")
+	}
+
+	// RS hash of 11 chars should NOT match deployment pattern
+	podName = "myapp-bcdfghjklnp-x4m2v"
+	got = normalizePodName(podName)
+	if got != "myapp-bcdfghjklnp" {
+		t.Errorf("RS hash len 11: normalizePodName(%q) = %q, want %q", podName, got, "myapp-bcdfghjklnp")
+	}
+}
+
+func TestDeriveIdentity_PodNormalization(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   map[string]string
+		wantName string
+		wantWfID string
+	}{
+		{
+			name: "DaemonSet pod without daemonset label groups correctly",
+			labels: map[string]string{
+				"namespace": "kube-system",
+				"pod":       "node-exporter-4mdcv",
+				"alertname": "NodeClockNotSynchronising",
+			},
+			wantName: "node-exporter",
+			wantWfID: "triage/kube-system/Pod/node-exporter/NodeClockNotSynchronising",
+		},
+		{
+			name: "second DaemonSet pod produces same workflow ID",
+			labels: map[string]string{
+				"namespace": "kube-system",
+				"pod":       "node-exporter-r8x5n",
+				"alertname": "NodeClockNotSynchronising",
+			},
+			wantName: "node-exporter",
+			wantWfID: "triage/kube-system/Pod/node-exporter/NodeClockNotSynchronising",
+		},
+		{
+			name: "Deployment pod without deployment label groups correctly",
+			labels: map[string]string{
+				"namespace": "linkerd",
+				"pod":       "linkerd-controller-bc5d8fg2hj-x4mdv",
+				"alertname": "LinkerdControlPlaneDown",
+			},
+			wantName: "linkerd-controller",
+			wantWfID: "triage/linkerd/Pod/linkerd-controller/LinkerdControlPlaneDown",
+		},
+		{
+			name: "StatefulSet pod preserves ordinal",
+			labels: map[string]string{
+				"namespace": "db",
+				"pod":       "postgres-0",
+				"alertname": "KubePodNotReady",
+			},
+			wantName: "postgres-0",
+			wantWfID: "triage/db/Pod/postgres-0/KubePodNotReady",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := DeriveIdentity(tc.labels)
+			if id.Name != tc.wantName {
+				t.Errorf("Name = %q, want %q", id.Name, tc.wantName)
+			}
+			if got := id.WorkflowID(); got != tc.wantWfID {
+				t.Errorf("WorkflowID() = %q, want %q", got, tc.wantWfID)
+			}
+		})
+	}
+
+	// The critical test: two DaemonSet pods produce the SAME workflow ID
+	id1 := DeriveIdentity(tests[0].labels)
+	id2 := DeriveIdentity(tests[1].labels)
+	if id1.WorkflowID() != id2.WorkflowID() {
+		t.Errorf("fragmentation: pod %q → %q, pod %q → %q (should be equal)",
+			tests[0].labels["pod"], id1.WorkflowID(),
+			tests[1].labels["pod"], id2.WorkflowID())
+	}
+}
+
 func TestDeriveIdentity_CronJobPriority(t *testing.T) {
 	// CronJob label should take priority over job_name
 	labels := map[string]string{
@@ -360,5 +589,111 @@ func TestDeriveIdentity_CronJobPriority(t *testing.T) {
 	want := "triage/batch/CronJob/parent-cronjob/KubeJobFailed"
 	if got := id.WorkflowID(); got != want {
 		t.Errorf("WorkflowID() = %q, want %q", got, want)
+	}
+}
+
+func TestDeriveIdentity_AppLabelInference(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   map[string]string
+		wantKind string
+		wantName string
+		wantWfID string
+	}{
+		{
+			name: "app.kubernetes.io/name groups pods by app",
+			labels: map[string]string{
+				"namespace":                  "ingress",
+				"pod":                        "ingress-nginx-controller-bc5d8fg2hj-x4mdv",
+				"app.kubernetes.io/name":     "ingress-nginx",
+				"alertname":                  "HighLatency",
+			},
+			wantKind: "App",
+			wantName: "ingress-nginx",
+			wantWfID: "triage/ingress/App/ingress-nginx/HighLatency",
+		},
+		{
+			name: "app label used when app.kubernetes.io/name absent",
+			labels: map[string]string{
+				"namespace": "monitoring",
+				"pod":       "prometheus-server-bc5d8fg2hj-x4mdv",
+				"app":       "prometheus",
+				"alertname": "PrometheusDown",
+			},
+			wantKind: "App",
+			wantName: "prometheus",
+			wantWfID: "triage/monitoring/App/prometheus/PrometheusDown",
+		},
+		{
+			name: "app.kubernetes.io/name takes priority over app label",
+			labels: map[string]string{
+				"namespace":              "default",
+				"pod":                    "myapp-bc5d8fg2hj-x4mdv",
+				"app.kubernetes.io/name": "my-application",
+				"app":                    "myapp",
+				"alertname":              "HighCPU",
+			},
+			wantKind: "App",
+			wantName: "my-application",
+			wantWfID: "triage/default/App/my-application/HighCPU",
+		},
+		{
+			name: "deployment label takes priority over app labels",
+			labels: map[string]string{
+				"namespace":              "default",
+				"deployment":             "api-server",
+				"app.kubernetes.io/name": "api-server",
+				"app":                    "api-server",
+				"alertname":              "HighCPU",
+			},
+			wantKind: "Deployment",
+			wantName: "api-server",
+			wantWfID: "triage/default/Deployment/api-server/HighCPU",
+		},
+		{
+			name: "falls to pod normalization when no app labels",
+			labels: map[string]string{
+				"namespace": "kube-system",
+				"pod":       "coredns-bc5d8fg2hj-x4mdv",
+				"alertname": "CoreDNSDown",
+			},
+			wantKind: "Pod",
+			wantName: "coredns",
+			wantWfID: "triage/kube-system/Pod/coredns/CoreDNSDown",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := DeriveIdentity(tc.labels)
+			if id.Kind != tc.wantKind {
+				t.Errorf("Kind = %q, want %q", id.Kind, tc.wantKind)
+			}
+			if id.Name != tc.wantName {
+				t.Errorf("Name = %q, want %q", id.Name, tc.wantName)
+			}
+			if got := id.WorkflowID(); got != tc.wantWfID {
+				t.Errorf("WorkflowID() = %q, want %q", got, tc.wantWfID)
+			}
+		})
+	}
+}
+
+func TestDeriveIdentity_AppLabelGroupsPods(t *testing.T) {
+	// Two pods with same app label but different pod names → same workflow ID
+	id1 := DeriveIdentity(map[string]string{
+		"namespace":              "monitoring",
+		"pod":                    "node-exporter-4mdcv",
+		"app.kubernetes.io/name": "prometheus-node-exporter",
+		"alertname":              "NodeClockNotSynchronising",
+	})
+	id2 := DeriveIdentity(map[string]string{
+		"namespace":              "monitoring",
+		"pod":                    "node-exporter-cc4v8",
+		"app.kubernetes.io/name": "prometheus-node-exporter",
+		"alertname":              "NodeClockNotSynchronising",
+	})
+	if id1.WorkflowID() != id2.WorkflowID() {
+		t.Errorf("app label grouping failed: %q != %q", id1.WorkflowID(), id2.WorkflowID())
 	}
 }
