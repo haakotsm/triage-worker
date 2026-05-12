@@ -3,10 +3,12 @@ package webhook
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +17,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/haakotsm/triage-worker/internal/types"
 )
+
+const resolvedUpdateSQL = `UPDATE triage.reports SET resolved_at = NOW() WHERE workflow_id = $1 AND resolved_at IS NULL`
 
 // mockTemporalClient implements the minimal interface needed for webhook tests.
 // The real client.Client interface is too large to mock fully, so we test
@@ -353,7 +357,7 @@ func TestHandleResolvedAlerts_UpdatesMatchingReport(t *testing.T) {
 	expectedWfID := identity.WorkflowID()
 
 	// Expect the UPDATE query with the correct workflow_id
-	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
 		WithArgs(expectedWfID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -459,7 +463,7 @@ func TestHandleResolvedAlerts_DeduplicatesWorkflowIDs(t *testing.T) {
 	identity := types.DeriveIdentity(group.Alerts[0].Labels)
 	expectedWfID := identity.WorkflowID()
 
-	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
 		WithArgs(expectedWfID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -499,7 +503,7 @@ func TestHandleResolvedAlerts_NoRowsAffected(t *testing.T) {
 	expectedWfID := identity.WorkflowID()
 
 	// Report doesn't exist or already resolved — 0 rows affected
-	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
 		WithArgs(expectedWfID).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -543,12 +547,13 @@ func TestHandleResolvedAlerts_MultipleDistinctWorkflows(t *testing.T) {
 	id0 := types.DeriveIdentity(group.Alerts[0].Labels)
 	id1 := types.DeriveIdentity(group.Alerts[1].Labels)
 
-	// Expect two separate UPDATEs (order depends on map iteration — use AnyArg)
-	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
-		WithArgs(sqlmock.AnyArg()).
+	// Order-independent matching — map iteration is non-deterministic
+	mock.MatchExpectationsInOrder(false)
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
+		WithArgs(id0.WorkflowID()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE triage.reports SET resolved_at").
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
+		WithArgs(id1.WorkflowID()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	updated := h.handleResolvedAlerts(t.Context(), group)
@@ -558,9 +563,52 @@ func TestHandleResolvedAlerts_MultipleDistinctWorkflows(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
+}
 
-	// Verify the two workflow IDs are indeed different
-	if id0.WorkflowID() == id1.WorkflowID() {
-		t.Errorf("expected different workflow IDs, both = %q", id0.WorkflowID())
+func TestHandleResolvedAlerts_DBErrorContinuesProcessing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      db,
+	}
+
+	// Two distinct workflow IDs — first will error, second will succeed
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{
+				Status: "resolved",
+				Labels: map[string]string{"alertname": "Err", "namespace": "ns", "deployment": "app"},
+			},
+			{
+				Status: "resolved",
+				Labels: map[string]string{"alertname": "OK", "namespace": "ns", "deployment": "app"},
+			},
+		},
+	}
+
+	// Order-independent: one errors, one succeeds
+	mock.MatchExpectationsInOrder(false)
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
+		WithArgs(types.DeriveIdentity(group.Alerts[0].Labels).WorkflowID()).
+		WillReturnError(fmt.Errorf("connection refused"))
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
+		WithArgs(types.DeriveIdentity(group.Alerts[1].Labels).WorkflowID()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	updated := h.handleResolvedAlerts(t.Context(), group)
+
+	// Should return 1 — the error is logged and processing continues
+	if updated != 1 {
+		t.Errorf("handleResolvedAlerts() = %d, want 1 (partial failure)", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
 }
