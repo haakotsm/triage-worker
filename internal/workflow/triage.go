@@ -119,6 +119,10 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	l1Cmds := types.L1Commands(report.Classification, params.Identity)
 	report.Recommendations = append(report.Recommendations, l1Cmds...)
 
+	// --- Step 3.6: Compute summary and normalize recommendations ---
+	types.NormalizeSummary(params.Identity, &report)
+	types.NormalizeRecommendations(&report)
+
 	// --- Step 4: Store report ---
 	reportOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 15 * time.Second,

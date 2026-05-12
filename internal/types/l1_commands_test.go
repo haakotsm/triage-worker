@@ -101,6 +101,23 @@ func TestL1Commands_AllRiskNone(t *testing.T) {
 	}
 }
 
+func TestL1Commands_AllHaveSourceAndExpected(t *testing.T) {
+	classifications := []string{"CrashLoop", "OOM", "Network", "ImagePull", "ResourceExhaustion", "Config", "Scheduling", "Unknown"}
+	id := IncidentIdentity{Namespace: "ns", Kind: "Deployment", Name: "app"}
+
+	for _, c := range classifications {
+		cmds := L1Commands(c, id)
+		for _, cmd := range cmds {
+			if cmd.Source != "l1" {
+				t.Errorf("classification=%q action=%q: source=%q, want 'l1'", c, cmd.Action, cmd.Source)
+			}
+			if cmd.Expected == "" {
+				t.Errorf("classification=%q action=%q: expected is empty", c, cmd.Action)
+			}
+		}
+	}
+}
+
 func TestKindToResource(t *testing.T) {
 	tests := []struct {
 		kind string
