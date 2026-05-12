@@ -65,17 +65,18 @@ func TestNormalizeSummary_SetsSummaryWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestNormalizeSummary_KeepsShortExistingSummary(t *testing.T) {
+func TestNormalizeSummary_AlwaysOverwritesExisting(t *testing.T) {
 	identity := IncidentIdentity{Kind: "Pod", Name: "x", Namespace: "ns", AlertName: "A"}
 	report := &TriageReport{
-		Summary:        "My custom summary",
+		Summary:        "LLM hallucinated summary",
 		Classification: "Config",
 		RootCause:      "bad env var",
 	}
 
 	NormalizeSummary(identity, report)
-	if report.Summary != "My custom summary" {
-		t.Errorf("NormalizeSummary() changed existing summary to %q", report.Summary)
+	want := "Pod/x in ns: Config — bad env var"
+	if report.Summary != want {
+		t.Errorf("NormalizeSummary() should overwrite LLM summary, got %q, want %q", report.Summary, want)
 	}
 }
 
@@ -141,6 +142,77 @@ func TestNormalizeRecommendations_AllL1(t *testing.T) {
 	for _, r := range report.Recommendations {
 		if r.Source != "l1" {
 			t.Errorf("Expected all l1, got %q", r.Source)
+		}
+	}
+}
+
+func TestNormalizeRecommendations_ScrubsAgentExpected(t *testing.T) {
+	report := &TriageReport{
+		Recommendations: []Recommendation{
+			{Action: "Agent rec", Risk: "low", Expected: "hallucinated hint"},
+		},
+	}
+
+	NormalizeRecommendations(report)
+	if report.Recommendations[0].Expected != "" {
+		t.Errorf("Expected agent rec Expected to be scrubbed, got %q", report.Recommendations[0].Expected)
+	}
+}
+
+func TestNormalizeRecommendations_Empty(t *testing.T) {
+	report := &TriageReport{}
+	NormalizeRecommendations(report)
+	// No panic — append on nil/empty slice is fine
+	if len(report.Recommendations) != 0 {
+		t.Errorf("Expected 0 recommendations, got %d", len(report.Recommendations))
+	}
+}
+
+func TestBuildSummary_UTF8MultiByte(t *testing.T) {
+	identity := IncidentIdentity{
+		Kind: "Deployment", Name: "api", Namespace: "prod", AlertName: "Alert",
+	}
+	// Create a root cause with multi-byte CJK characters exceeding 120 runes
+	longRC := "OOMKill caused by メモリリーク in connection pool. " +
+		"サービスが応答しなくなり、ポッドが再起動を繰り返しています。" +
+		"メモリ使用量が制限値を超過しました。追加の調査が必要です。"
+	report := &TriageReport{
+		Classification: "OOM",
+		RootCause:      longRC,
+	}
+
+	got := BuildSummary(identity, report)
+	// Must be valid UTF-8
+	for i, r := range got {
+		if r == '\ufffd' {
+			t.Errorf("BuildSummary() contains replacement char at index %d — invalid UTF-8 from truncation", i)
+			break
+		}
+	}
+	// Must end with ... if root cause was truncated
+	if len([]rune(longRC)) > 120 && got[len(got)-3:] != "..." {
+		t.Errorf("BuildSummary() should end with '...' for long root cause")
+	}
+}
+
+func TestValidateBlastRadius(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"pod", "pod"},
+		{"deployment", "deployment"},
+		{"namespace", "namespace"},
+		{"cluster", "cluster"},
+		{"", "pod"},
+		{"node", "pod"},
+		{"global", "pod"},
+		{"entire-cluster", "pod"},
+	}
+	for _, tt := range tests {
+		got := ValidateBlastRadius(tt.input)
+		if got != tt.want {
+			t.Errorf("ValidateBlastRadius(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

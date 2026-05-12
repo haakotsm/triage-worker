@@ -54,7 +54,7 @@ func L1Commands(classification string, identity IncidentIdentity) []Recommendati
 		return append(base, []Recommendation{
 			{Action: "Check NetworkPolicies", Command: fmt.Sprintf("kubectl get networkpolicy -n %s", ns), Risk: "none", Source: "l1", Expected: "Missing or overly restrictive policies blocking traffic"},
 			{Action: "Check service endpoints", Command: fmt.Sprintf("kubectl get endpoints -n %s", ns), Risk: "none", Source: "l1", Expected: "Empty ENDPOINTS column means no healthy backends"},
-			{Action: "Check Cilium status", Command: fmt.Sprintf("kubectl exec -n kube-system -l app.kubernetes.io/name=cilium -- cilium endpoint list | grep %s", ns), Risk: "none", Source: "l1", Expected: "Endpoint state should be ready, not regenerating or waiting"},
+			{Action: "Check Cilium status", Command: fmt.Sprintf("kubectl exec -n kube-system -l app.kubernetes.io/name=cilium -- cilium endpoint list | grep %s", ns), Risk: "low", Source: "l1", Expected: "Endpoint state should be ready. Requires Cilium CNI — skip if using different CNI"},
 		}...)
 
 	case "ImagePull":

@@ -2,13 +2,27 @@ package types
 
 import "fmt"
 
+// validBlastRadii constrains blast_radius to known values for sort correctness.
+var validBlastRadii = map[string]bool{
+	"pod": true, "deployment": true, "namespace": true, "cluster": true,
+}
+
+// ValidateBlastRadius returns a known blast radius value, defaulting to "pod".
+func ValidateBlastRadius(raw string) string {
+	if validBlastRadii[raw] {
+		return raw
+	}
+	return "pod"
+}
+
 // BuildSummary generates a deterministic one-line summary from report fields.
 // Format: "{Kind}/{Name} in {Namespace}: {Classification} — {root_cause_truncated}"
 // This is computed in Go, never by the LLM.
 func BuildSummary(identity IncidentIdentity, report *TriageReport) string {
 	rc := report.RootCause
-	if len(rc) > 120 {
-		rc = rc[:117] + "..."
+	runes := []rune(rc)
+	if len(runes) > 120 {
+		rc = string(runes[:117]) + "..."
 	}
 	return fmt.Sprintf("%s/%s in %s: %s — %s",
 		identity.Kind, identity.Name, identity.Namespace,
@@ -16,24 +30,25 @@ func BuildSummary(identity IncidentIdentity, report *TriageReport) string {
 	)
 }
 
-// NormalizeSummary ensures the report has a summary.
-// Prefers agent-generated if present and short; falls back to computed.
+// NormalizeSummary unconditionally sets the report summary to a computed value.
+// The LLM never controls this field — always overwrite.
 func NormalizeSummary(identity IncidentIdentity, report *TriageReport) {
-	if report.Summary == "" || len(report.Summary) > 200 {
-		report.Summary = BuildSummary(identity, report)
-	}
+	report.Summary = BuildSummary(identity, report)
 }
 
-// NormalizeRecommendations tags agent-generated recommendations with Source
-// and sorts all recommendations so L1 commands (deterministic) come first.
+// NormalizeRecommendations scrubs LLM-controlled fields, tags agent-generated
+// recommendations with Source, and sorts L1 commands (deterministic) first.
 func NormalizeRecommendations(report *TriageReport) {
 	for i := range report.Recommendations {
 		if report.Recommendations[i].Source == "" {
 			report.Recommendations[i].Source = "agent"
 		}
+		// Scrub Expected on agent recs — only L1 commands set this in Go.
+		if report.Recommendations[i].Source == "agent" {
+			report.Recommendations[i].Expected = ""
+		}
 	}
-	// Stable sort: l1 commands before agent recommendations.
-	// L1 commands are appended after agent recs, so we partition in-place.
+	// Stable partition: l1 commands before agent recommendations.
 	l1 := make([]Recommendation, 0, len(report.Recommendations))
 	agent := make([]Recommendation, 0, len(report.Recommendations))
 	for _, r := range report.Recommendations {

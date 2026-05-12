@@ -22,6 +22,9 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 	if r.DB == nil {
 		return nil
 	}
+	if result.Report == nil {
+		return fmt.Errorf("store report: report is nil for workflow %s", result.WorkflowID)
+	}
 
 	alertsJSON, err := json.Marshal(result.Report.Evidence)
 	if err != nil {
@@ -38,16 +41,10 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 		return fmt.Errorf("marshal causal chain: %w", err)
 	}
 
-	// Extract blast_radius from report impact, default to "pod"
-	blastRadius := "pod"
-	if result.Report != nil && result.Report.Impact.BlastRadius != "" {
-		blastRadius = result.Report.Impact.BlastRadius
-	}
+	// Extract blast_radius from report impact, validated to known values.
+	blastRadius := types.ValidateBlastRadius(result.Report.Impact.BlastRadius)
 
-	summary := ""
-	if result.Report != nil {
-		summary = result.Report.Summary
-	}
+	summary := result.Report.Summary
 
 	query := `
 		INSERT INTO triage.reports (
@@ -132,12 +129,9 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_reports_severity ON triage.reports (severity);
 		CREATE INDEX IF NOT EXISTS idx_reports_created_at ON triage.reports (created_at DESC);
 
-		-- Migration: add columns if table already exists (safe: ADD IF NOT EXISTS via DO block)
-		DO $$ BEGIN
-			ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
-			ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS blast_radius TEXT NOT NULL DEFAULT 'pod';
-		EXCEPTION WHEN OTHERS THEN NULL;
-		END $$;
+		-- Migration: add columns if table already exists
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS blast_radius TEXT NOT NULL DEFAULT 'pod';
 	`
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
