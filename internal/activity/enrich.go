@@ -42,6 +42,9 @@ func (a *Activities) QueryPrometheus(ctx context.Context, identity types.Inciden
 		`increase(kube_pod_container_status_restarts_total{namespace="%s"}[5m])`,
 		identity.Namespace,
 	)
+	// Narrow restart query to pods matching the workload name prefix.
+	// For App kind this is best-effort — assumes pod names share the app
+	// label value as a prefix, which is true for most Helm-managed workloads.
 	if identity.Kind == "Deployment" || identity.Kind == "StatefulSet" || identity.Kind == "App" || identity.Kind == "Pod" {
 		restartQuery = fmt.Sprintf(
 			`increase(kube_pod_container_status_restarts_total{namespace="%s", pod=~"%s-.*"}[5m])`,
@@ -107,8 +110,11 @@ func (k *K8sActivity) QueryKubernetesAPI(ctx context.Context, identity types.Inc
 	case "DaemonSet":
 		labelSelector = fmt.Sprintf("app=%s", identity.Name)
 	case "App":
+		// Try app.kubernetes.io/name first (standard), fall back to app
 		labelSelector = fmt.Sprintf("app.kubernetes.io/name=%s", identity.Name)
 	default:
+		// Pod/Namespace/Job kinds — no reliable label selector, list all
+		// pods in namespace. Event matching downstream filters by prefix.
 		labelSelector = ""
 	}
 

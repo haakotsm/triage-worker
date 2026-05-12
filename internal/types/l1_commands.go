@@ -10,29 +10,44 @@ func L1Commands(classification string, identity IncidentIdentity) []Recommendati
 	kind := identity.Kind
 
 	// Build label selector based on identity kind.
-	// Owner-level kinds use app= label; App/Pod use pod prefix match.
-	selector := fmt.Sprintf("-l app=%s", name)
-	if kind == "App" || kind == "Pod" || kind == "Namespace" {
+	// Owner-level kinds (Deployment, StatefulSet, DaemonSet) use app= label.
+	// App kind uses app.kubernetes.io/name= (the label it was derived from).
+	// Pod kind (normalized name, no app labels) and Namespace kind list all
+	// pods in the namespace since no reliable label selector exists.
+	var selector string
+	switch kind {
+	case "App":
 		selector = fmt.Sprintf("-l app.kubernetes.io/name=%s", name)
+	case "Pod", "Namespace":
+		selector = "" // no reliable label — list all pods in namespace
+	default:
+		selector = fmt.Sprintf("-l app=%s", name)
+	}
+
+	// Events: use field selector for owner-level kinds where name matches
+	// involvedObject, otherwise list namespace-wide.
+	eventsCmd := fmt.Sprintf("kubectl get events -n %s --sort-by='.lastTimestamp'", ns)
+	if kind != "App" && kind != "Pod" && kind != "Namespace" {
+		eventsCmd = fmt.Sprintf("kubectl get events -n %s --sort-by='.lastTimestamp' --field-selector involvedObject.name=%s", ns, name)
 	}
 
 	base := []Recommendation{
 		{Action: "Get pod status", Command: fmt.Sprintf("kubectl get pods -n %s %s", ns, selector), Risk: "none"},
 		{Action: "Describe pod", Command: fmt.Sprintf("kubectl describe pod -n %s %s", ns, selector), Risk: "none"},
-		{Action: "Check recent events", Command: fmt.Sprintf("kubectl get events -n %s --sort-by='.lastTimestamp'", ns), Risk: "none"},
+		{Action: "Check recent events", Command: eventsCmd, Risk: "none"},
 	}
 
 	switch classification {
 	case "CrashLoop":
 		return append(base, []Recommendation{
-			{Action: "View container logs", Command: fmt.Sprintf("kubectl logs -n %s -l app=%s --tail=100 --previous", ns, name), Risk: "none"},
-			{Action: "Check exit codes", Command: fmt.Sprintf("kubectl get pod -n %s -l app=%s -o jsonpath='{.items[*].status.containerStatuses[*].lastState.terminated.exitCode}'", ns, name), Risk: "none"},
+			{Action: "View container logs", Command: fmt.Sprintf("kubectl logs -n %s %s --tail=100 --previous", ns, selector), Risk: "none"},
+			{Action: "Check exit codes", Command: fmt.Sprintf("kubectl get pod -n %s %s -o jsonpath='{.items[*].status.containerStatuses[*].lastState.terminated.exitCode}'", ns, selector), Risk: "none"},
 		}...)
 
 	case "OOM":
 		return append(base, []Recommendation{
-			{Action: "Check memory limits", Command: fmt.Sprintf("kubectl get pod -n %s -l app=%s -o jsonpath='{.items[*].spec.containers[*].resources.limits.memory}'", ns, name), Risk: "none"},
-			{Action: "View memory metrics", Command: fmt.Sprintf("kubectl top pods -n %s -l app=%s", ns, name), Risk: "none"},
+			{Action: "Check memory limits", Command: fmt.Sprintf("kubectl get pod -n %s %s -o jsonpath='{.items[*].spec.containers[*].resources.limits.memory}'", ns, selector), Risk: "none"},
+			{Action: "View memory metrics", Command: fmt.Sprintf("kubectl top pods -n %s --sort-by=memory", ns), Risk: "none"},
 		}...)
 
 	case "Network":
