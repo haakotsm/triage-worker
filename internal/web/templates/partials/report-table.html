@@ -1,0 +1,76 @@
+{{define "report-table"}}
+<div hx-get="/partials/reports" hx-trigger="every 30s" hx-swap="outerHTML"
+     hx-include="[name='search'],[name='severity'],[name='status']">
+  <div class="overflow-x-auto">
+    <table class="table table-zebra table-sm">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>Workload</th>
+          <th>Namespace</th>
+          <th>Alert</th>
+          <th>Blast</th>
+          <th>Classification</th>
+          <th>Summary</th>
+          <th>Age</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Reports}}
+        <tr class="hover cursor-pointer"
+            hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true">
+          <td><span class="badge {{severityClass .Severity}} badge-sm">{{.Severity}}</span></td>
+          <td class="font-mono text-sm">{{.Workload}}</td>
+          <td>{{.Namespace}}</td>
+          <td class="text-sm">{{.AlertName}}</td>
+          <td>{{blastIcon .BlastRadius}} {{.BlastRadius}}</td>
+          <td><span class="badge badge-outline badge-sm">{{.Classification}}</span></td>
+          <td class="max-w-xs truncate text-sm">{{.Summary}}</td>
+          <td class="text-sm whitespace-nowrap">{{timeAgo .CompletedAt}}</td>
+          <td>
+            {{if .ResolvedAt}}
+              <span class="badge badge-success badge-sm">Resolved</span>
+            {{else}}
+              <span class="badge badge-error badge-sm">Active</span>
+            {{end}}
+          </td>
+        </tr>
+        {{else}}
+        <tr>
+          <td colspan="9" class="text-center py-12 text-base-content/50">
+            <div class="flex flex-col items-center gap-2">
+              <span class="text-4xl">✅</span>
+              <span>No triage reports found</span>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{/* Pagination */}}
+  {{if gt .TotalCount .Limit}}
+  <div class="flex justify-center mt-4">
+    <div class="join">
+      {{if gt .Offset 0}}
+      <button class="join-item btn btn-sm"
+              hx-get="/partials/reports?offset={{sub .Offset .Limit}}&limit={{.Limit}}"
+              hx-target="#report-list"
+              hx-include="[name='search'],[name='severity'],[name='status']">«</button>
+      {{end}}
+      <button class="join-item btn btn-sm btn-disabled">
+        Page {{add (div .Offset .Limit) 1}} of {{add (div .TotalCount .Limit) 1}}
+      </button>
+      {{if lt (add .Offset .Limit) .TotalCount}}
+      <button class="join-item btn btn-sm"
+              hx-get="/partials/reports?offset={{add .Offset .Limit}}&limit={{.Limit}}"
+              hx-target="#report-list"
+              hx-include="[name='search'],[name='severity'],[name='status']">»</button>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}

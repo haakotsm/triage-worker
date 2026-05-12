@@ -1,0 +1,44 @@
+{{define "dashboard"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "content"}}
+<div class="flex flex-col gap-4">
+  {{/* Filters */}}
+  <div class="card bg-base-100 shadow-sm">
+    <div class="card-body py-3">
+      <form hx-get="/partials/reports" hx-target="#report-list" hx-push-url="true"
+            class="flex flex-wrap gap-3 items-end">
+        <input type="text" name="search" placeholder="Search workload, namespace, alert..."
+               class="input input-bordered input-sm w-64"
+               value="{{.Query}}"
+               hx-get="/partials/reports" hx-trigger="keyup changed delay:300ms"
+               hx-target="#report-list">
+        <select name="severity" class="select select-bordered select-sm"
+                hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
+                hx-include="[name='search'],[name='status']">
+          <option value="">All Severities</option>
+          <option value="critical" {{if eq .Severity "critical"}}selected{{end}}>🔴 Critical</option>
+          <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>🟡 Warning</option>
+          <option value="info" {{if eq .Severity "info"}}selected{{end}}>🔵 Info</option>
+        </select>
+        <select name="status" class="select select-bordered select-sm"
+                hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
+                hx-include="[name='search'],[name='severity']">
+          <option value="">All Status</option>
+          <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
+          <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
+        </select>
+        <span class="text-sm text-base-content/60" id="report-count">
+          {{.TotalCount}} report{{if ne .TotalCount 1}}s{{end}}
+        </span>
+      </form>
+    </div>
+  </div>
+
+  {{/* Report table */}}
+  <div id="report-list">
+    {{template "report-table" .}}
+  </div>
+</div>
+{{end}}

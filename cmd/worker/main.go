@@ -18,6 +18,7 @@ import (
 	"github.com/haakotsm/triage-worker/internal/activity"
 	triageapi "github.com/haakotsm/triage-worker/internal/api"
 	"github.com/haakotsm/triage-worker/internal/auth"
+	"github.com/haakotsm/triage-worker/internal/web"
 	"github.com/haakotsm/triage-worker/internal/webhook"
 	"github.com/haakotsm/triage-worker/internal/workflow"
 
@@ -142,11 +143,19 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 	// --- HTTP Server (webhook + health + API) ---
 	var apiHandler http.Handler
+	var webHandler http.Handler
 	if db != nil {
 		apiHandler = triageapi.NewHandler(db, logger)
 		logger.Info("report API enabled")
+
+		wh, err := web.NewHandler(db, logger)
+		if err != nil {
+			return fmt.Errorf("create web handler: %w", err)
+		}
+		webHandler = wh
+		logger.Info("web dashboard enabled")
 	}
-	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, db)
+	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, webHandler, db)
 
 	srv := &http.Server{
 		Addr:         listenAddr,

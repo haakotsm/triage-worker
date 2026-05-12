@@ -1,0 +1,33 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en" data-theme="luxury">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Triage Dashboard</title>
+  <link rel="stylesheet" href="/static/output.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/alpine.min.js" defer></script>
+</head>
+<body class="min-h-screen bg-base-200">
+  <div class="navbar bg-base-100 shadow-lg">
+    <div class="flex-1">
+      <a href="/" class="btn btn-ghost text-xl">🔍 Triage Dashboard</a>
+    </div>
+    <div class="flex-none gap-2" x-data="{ luxury: true }" x-init="
+      luxury = localStorage.getItem('theme') !== 'light';
+      $watch('luxury', v => {
+        document.documentElement.setAttribute('data-theme', v ? 'luxury' : 'light');
+        localStorage.setItem('theme', v ? 'luxury' : 'light');
+      })">
+      <label class="swap swap-rotate btn btn-ghost btn-circle">
+        <input type="checkbox" x-model="luxury" />
+        <span class="swap-on">🌙</span>
+        <span class="swap-off">☀️</span>
+      </label>
+    </div>
+  </div>
+  <main class="container mx-auto px-4 py-6" id="main-content">
+    {{template "content" .}}
+  </main>
+</body>
+</html>{{end}}
