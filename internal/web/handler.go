@@ -275,7 +275,9 @@ func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
 func (h *Handler) renderError(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusInternalServerError)
-	_ = h.partials.ExecuteTemplate(w, "error", map[string]string{"Message": msg})
+	if err := h.partials.ExecuteTemplate(w, "error", map[string]string{"Message": msg}); err != nil {
+		h.logger.Error("render error template", "error", err)
+	}
 }
 
 // fetchDashboardData queries reports for the dashboard.
@@ -324,7 +326,11 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
 			completed_at DESC
 		LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
-	dataArgs := append(args, limit, offset)
+	// Explicit copy to avoid mutating args' backing array.
+	dataArgs := make([]interface{}, len(args)+2)
+	copy(dataArgs, args)
+	dataArgs[len(args)] = limit
+	dataArgs[len(args)+1] = offset
 
 	reports, err := h.queryReports(r.Context(), dataQuery, dataArgs...)
 	if err != nil {
@@ -446,6 +452,11 @@ func formatDuration(seconds float64) string {
 func computeSparkline(counts []int, width, height int) string {
 	if len(counts) == 0 {
 		return fmt.Sprintf("0,%d %d,%d", height, width, height)
+	}
+	if len(counts) == 1 {
+		// Single data point → flat line at mid-height
+		y := float64(height) / 2
+		return fmt.Sprintf("0,%.0f %d,%.0f", y, width, y)
 	}
 	maxVal := 1
 	for _, c := range counts {
@@ -655,16 +666,17 @@ func templateFuncs() template.FuncMap {
 			}
 			return (total + perPage - 1) / perPage
 		},
+		// SAFETY: all return values are hardcoded HTML, no user input.
 		"blastDots": func(b string) template.HTML {
 			switch b {
 			case "cluster":
-				return template.HTML(`<span class="text-error">●●●●</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-error">●●●●</span><span class="sr-only">cluster</span>`)
 			case "namespace":
-				return template.HTML(`<span class="text-warning">●●●</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-warning">●●●</span><span class="sr-only">namespace</span>`)
 			case "deployment":
-				return template.HTML(`<span class="text-info">●●</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-info">●●</span><span class="sr-only">deployment</span>`)
 			default:
-				return template.HTML(`<span class="text-success">●</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-success">●</span><span class="sr-only">pod</span>`)
 			}
 		},
 		"fmtPct": func(f float64) string {

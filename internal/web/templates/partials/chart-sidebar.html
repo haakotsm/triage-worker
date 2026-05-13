@@ -1,5 +1,5 @@
 {{define "chart-sidebar"}}
-<div class="lg:col-span-2 flex flex-col gap-4">
+<div class="flex flex-col gap-4">
 
   {{/* Blast Radius Distribution */}}
   <div class="card bg-base-100 shadow-md">
@@ -9,25 +9,29 @@
         <div class="flex items-center gap-2">
           <span class="text-xs w-20 text-right text-base-content/60">Cluster</span>
           <progress class="progress progress-error h-3 flex-1"
-                    value="{{.Stats.BlastCluster}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"></progress>
+                    value="{{.Stats.BlastCluster}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
+                    aria-label="Cluster blast radius incidents"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Stats.BlastCluster}}</span>
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs w-20 text-right text-base-content/60">Namespace</span>
           <progress class="progress progress-warning h-3 flex-1"
-                    value="{{.Stats.BlastNamespace}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"></progress>
+                    value="{{.Stats.BlastNamespace}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
+                    aria-label="Namespace blast radius incidents"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Stats.BlastNamespace}}</span>
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs w-20 text-right text-base-content/60">Deploy</span>
           <progress class="progress progress-info h-3 flex-1"
-                    value="{{.Stats.BlastDeployment}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"></progress>
+                    value="{{.Stats.BlastDeployment}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
+                    aria-label="Deployment blast radius incidents"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Stats.BlastDeployment}}</span>
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs w-20 text-right text-base-content/60">Pod</span>
           <progress class="progress progress-success h-3 flex-1"
-                    value="{{.Stats.BlastPod}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"></progress>
+                    value="{{.Stats.BlastPod}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
+                    aria-label="Pod blast radius incidents"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Stats.BlastPod}}</span>
         </div>
       </div>
@@ -58,7 +62,9 @@
     <div class="card-body p-4">
       <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wider">14-Day Trend</h3>
       <div class="mt-2">
-        <svg viewBox="0 0 200 50" class="w-full h-16" preserveAspectRatio="none">
+        <svg viewBox="0 0 200 50" class="w-full h-16" preserveAspectRatio="none"
+             role="img" aria-label="14-day incident trend sparkline">
+          <title>14-day incident trend</title>
           <defs>
             <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="oklch(0.75 0.15 75 / 0.3)" />

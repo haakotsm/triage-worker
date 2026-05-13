@@ -24,7 +24,11 @@
           </p>
         </div>
         <div class="flex items-center gap-3">
-          <div class="radial-progress text-primary text-xs" style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:3px;" role="progressbar">
+          <div class="radial-progress text-primary text-xs"
+               style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:3px;"
+               role="progressbar" aria-valuemin="0" aria-valuemax="100"
+               aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
+               aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
             {{printf "%.0f" .Report.Confidence}}%
           </div>
           {{if .Report.ResolvedAt}}
@@ -61,7 +65,7 @@
       </div>
 
       {{/* Causal Chain */}}
-      {{if .Report.CausalChain}}
+      {{if gt (len .Report.CausalChain) 0}}
       <div class="collapse collapse-arrow bg-base-100 shadow">
         <input type="checkbox" checked />
         <div class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</div>
@@ -76,7 +80,7 @@
       {{end}}
 
       {{/* Evidence */}}
-      {{if .Report.Evidence}}
+      {{if gt (len .Report.Evidence) 0}}
       <div class="collapse collapse-arrow bg-base-100 shadow">
         <input type="checkbox" checked />
         <div class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</div>

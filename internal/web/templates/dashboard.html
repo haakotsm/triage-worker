@@ -14,17 +14,18 @@
   {{/* ═══ ROW 2: Charts Sidebar + Report Table (Z3 ↘ Z4) ═══ */}}
   <div class="grid grid-cols-1 lg:grid-cols-6 gap-4">
 
-    {{/* Z3: Chart sidebar — 2 of 6 columns */}}
-    {{template "chart-sidebar" .}}
+    {{/* Z3: Chart sidebar — 2 of 6 columns (pushed below table on mobile) */}}
+    <div class="lg:col-span-2 order-2 lg:order-1">
+      {{template "chart-sidebar" .}}
+    </div>
 
-    {{/* Z4: Filters + Table — 4 of 6 columns */}}
-    <div class="lg:col-span-4 flex flex-col gap-4">
+    {{/* Z4: Filters + Table — 4 of 6 columns (shown first on mobile) */}}
+    <div class="lg:col-span-4 flex flex-col gap-4 order-1 lg:order-2">
 
       {{/* Filter bar */}}
       <div class="card bg-base-100 shadow-sm">
         <div class="card-body py-3 px-4">
-          <form hx-get="/partials/reports" hx-target="#report-list"
-                class="flex flex-wrap gap-3 items-end">
+          <form @submit.prevent class="flex flex-wrap gap-3 items-end">
             <input type="text" name="search" placeholder="Search workload, namespace, alert..."
                    class="input input-bordered input-sm w-64"
                    value="{{.Query}}"
@@ -53,10 +54,8 @@
         </div>
       </div>
 
-      {{/* Report table */}}
-      <div id="report-list">
-        {{template "report-table" .}}
-      </div>
+      {{/* Report table — id="report-list" is on the partial's root div */}}
+      {{template "report-table" .}}
     </div>
   </div>
 </div>

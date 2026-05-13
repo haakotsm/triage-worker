@@ -24,8 +24,8 @@
         document.documentElement.setAttribute('data-theme', v ? 'luxury' : 'light');
         localStorage.setItem('theme', v ? 'luxury' : 'light');
       })">
-      <label class="swap swap-rotate btn btn-ghost btn-circle">
-        <input type="checkbox" x-model="luxury" />
+      <label class="swap swap-rotate btn btn-ghost btn-circle" aria-label="Toggle theme">
+        <input type="checkbox" x-model="luxury" aria-label="Switch between dark and light theme" />
         <span class="swap-on">🌙</span>
         <span class="swap-off">☀️</span>
       </label>
