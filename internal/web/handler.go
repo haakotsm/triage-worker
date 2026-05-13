@@ -316,9 +316,10 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		args = append(args, "%"+search+"%")
 		argIdx++
 	}
-	if status == "active" {
+	switch status {
+	case "active":
 		where += " AND resolved_at IS NULL"
-	} else if status == "resolved" {
+	case "resolved":
 		where += " AND resolved_at IS NOT NULL"
 	}
 
