@@ -16,7 +16,6 @@ import (
 const (
 	maxSSEClients       = 100
 	sseReconnectTimeout = 3 * time.Second
-	channelIncidents    = "incident_changes"
 	channelReports      = "report_changes"
 )
 
@@ -71,16 +70,12 @@ func (b *SSEBroker) Start(ctx context.Context) error {
 
 	b.listener = pq.NewListener(b.dsn, 10*time.Second, time.Minute, reportProblem)
 
-	if err := b.listener.Listen(channelIncidents); err != nil {
-		cancel()
-		return fmt.Errorf("listen %s: %w", channelIncidents, err)
-	}
 	if err := b.listener.Listen(channelReports); err != nil {
 		cancel()
 		return fmt.Errorf("listen %s: %w", channelReports, err)
 	}
 
-	b.logger.Info("SSE broker started", "channels", []string{channelIncidents, channelReports})
+	b.logger.Info("SSE broker started", "channel", channelReports)
 
 	go b.dispatchLoop(ctx)
 	return nil
@@ -109,21 +104,23 @@ func (b *SSEBroker) dispatchLoop(ctx context.Context) {
 			return
 		case n := <-b.listener.Notify:
 			if n == nil {
-				// Connection lost, reconnect handled by pq.Listener
 				continue
 			}
-			event := SSEEvent{}
-			switch n.Channel {
-			case channelIncidents:
-				event.Name = "incident-update"
-				event.Data = n.Extra
-			case channelReports:
-				event.Name = "report-update"
-				event.Data = n.Extra
-			default:
+			if n.Channel != channelReports {
 				continue
 			}
-			b.broadcast(event)
+			// Determine event name from payload state for targeted frontend refresh.
+			eventName := "report-update"
+			var payload struct {
+				State string `json:"state"`
+			}
+			if json.Unmarshal([]byte(n.Extra), &payload) == nil {
+				switch payload.State {
+				case "correlating", "enriching", "triaging":
+					eventName = "incident-update"
+				}
+			}
+			b.broadcast(SSEEvent{Name: eventName, Data: n.Extra})
 		}
 	}
 }
@@ -228,12 +225,14 @@ type Incident struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-// FetchActiveIncidents queries the incidents table for in-flight workflows.
+// FetchActiveIncidents queries reports that are still in-flight (not yet completed or resolved).
 func FetchActiveIncidents(ctx context.Context, db *sql.DB) ([]Incident, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at, updated_at
-		 FROM triage.incidents
-		 ORDER BY updated_at DESC
+		`SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at,
+		        COALESCE(completed_at, created_at) as updated_at
+		 FROM triage.reports
+		 WHERE state IN ('correlating', 'enriching', 'triaging')
+		 ORDER BY created_at DESC
 		 LIMIT 50`)
 	if err != nil {
 		return nil, err
@@ -263,8 +262,8 @@ func (b *SSEBroker) BroadcastStatsUpdate(ctx context.Context) {
 		ActiveCount  int `json:"active_incidents"`
 	}
 	var s statsPayload
-	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports`).Scan(&s.TotalReports)
-	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.incidents`).Scan(&s.ActiveCount)
+	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state = 'reported'`).Scan(&s.TotalReports)
+	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state IN ('correlating','enriching','triaging')`).Scan(&s.ActiveCount)
 	data, _ := json.Marshal(s)
 	b.broadcast(SSEEvent{Name: "stats-update", Data: string(data)})
 }

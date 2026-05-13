@@ -27,6 +27,7 @@ type Report struct {
 	Severity         string
 	Summary          string
 	BlastRadius      string
+	State            string
 	RootCause        string
 	CausalChain      []string
 	Evidence         []Evidence
@@ -35,7 +36,7 @@ type Report struct {
 	EscalationNeeded bool
 	AlertCount       int
 	StartedAt        time.Time
-	CompletedAt      time.Time
+	CompletedAt      *time.Time
 	CreatedAt        time.Time
 	ResolvedAt       *time.Time
 }
@@ -321,22 +322,22 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		where += " AND resolved_at IS NOT NULL"
 	}
 
-	// Count query
+	// Count query — only completed/resolved reports.
 	var totalCount int
-	countQuery := "SELECT COUNT(*) FROM triage.reports " + where
+	countQuery := "SELECT COUNT(*) FROM triage.reports " + where + " AND state IN ('reported', 'resolved')"
 	if err := h.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount); err != nil {
 		return DashboardData{}, fmt.Errorf("count: %w", err)
 	}
 
-	// Data query
+	// Data query — only show completed/resolved reports (not in-flight).
 	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at, summary, blast_radius
-		FROM triage.reports %s
+		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
+		FROM triage.reports %s AND state IN ('reported', 'resolved')
 		ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END,
 			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
-			completed_at DESC
+			created_at DESC
 		LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
 	// Explicit copy to avoid mutating args' backing array.
 	dataArgs := make([]interface{}, len(args)+2)
@@ -380,19 +381,20 @@ func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
 	var s StatsData
 
 	// Single query for all counts using PostgreSQL FILTER.
+	// Only count completed reports (state IN reported, resolved) — not in-flight.
 	err := h.db.QueryRowContext(ctx, `SELECT
-		COUNT(*) FILTER (WHERE resolved_at IS NULL),
-		COUNT(*) FILTER (WHERE resolved_at IS NOT NULL),
-		COUNT(*) FILTER (WHERE escalation_needed = true AND resolved_at IS NULL),
-		COUNT(*) FILTER (WHERE severity = 'critical' AND resolved_at IS NULL),
-		COUNT(*) FILTER (WHERE severity = 'warning' AND resolved_at IS NULL),
-		COUNT(*) FILTER (WHERE severity = 'info' AND resolved_at IS NULL),
-		COUNT(*),
-		COUNT(*) FILTER (WHERE blast_radius = 'cluster' AND resolved_at IS NULL),
-		COUNT(*) FILTER (WHERE blast_radius = 'namespace' AND resolved_at IS NULL),
-		COUNT(*) FILTER (WHERE blast_radius = 'deployment' AND resolved_at IS NULL),
-		COUNT(*) FILTER (WHERE blast_radius = 'pod' AND resolved_at IS NULL),
-		COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - started_at))) FILTER (WHERE resolved_at IS NOT NULL), 0)
+		COUNT(*) FILTER (WHERE state = 'reported'),
+		COUNT(*) FILTER (WHERE state = 'resolved'),
+		COUNT(*) FILTER (WHERE escalation_needed = true AND state = 'reported'),
+		COUNT(*) FILTER (WHERE severity = 'critical' AND state = 'reported'),
+		COUNT(*) FILTER (WHERE severity = 'warning' AND state = 'reported'),
+		COUNT(*) FILTER (WHERE severity = 'info' AND state = 'reported'),
+		COUNT(*) FILTER (WHERE state IN ('reported', 'resolved')),
+		COUNT(*) FILTER (WHERE blast_radius = 'cluster' AND state = 'reported'),
+		COUNT(*) FILTER (WHERE blast_radius = 'namespace' AND state = 'reported'),
+		COUNT(*) FILTER (WHERE blast_radius = 'deployment' AND state = 'reported'),
+		COUNT(*) FILTER (WHERE blast_radius = 'pod' AND state = 'reported'),
+		COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - started_at))) FILTER (WHERE state = 'resolved'), 0)
 		FROM triage.reports`).Scan(
 		&s.ActiveCount, &s.ResolvedCount, &s.EscalatedCount,
 		&s.CriticalCount, &s.WarningCount, &s.InfoCount, &s.TotalCount,
@@ -408,9 +410,9 @@ func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
 		s.ResolutionRate = float64(s.ResolvedCount) / float64(s.TotalCount) * 100
 	}
 
-	// Classification breakdown (active only).
+	// Classification breakdown (active/reported only).
 	classRows, err := h.db.QueryContext(ctx, `SELECT classification, COUNT(*) as cnt
-		FROM triage.reports WHERE resolved_at IS NULL
+		FROM triage.reports WHERE state = 'reported'
 		GROUP BY classification ORDER BY cnt DESC`)
 	if err != nil {
 		return s, fmt.Errorf("classification: %w", err)
@@ -430,10 +432,10 @@ func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
 		return s, fmt.Errorf("classification rows: %w", err)
 	}
 
-	// Daily counts for sparkline (last 14 days).
+	// Daily counts for sparkline (last 14 days, completed reports only).
 	sparkRows, err := h.db.QueryContext(ctx, `SELECT d::date, COUNT(r.id)
 		FROM generate_series(CURRENT_DATE - INTERVAL '13 days', CURRENT_DATE, '1 day') AS d
-		LEFT JOIN triage.reports r ON r.created_at::date = d::date
+		LEFT JOIN triage.reports r ON r.created_at::date = d::date AND r.state IN ('reported', 'resolved')
 		GROUP BY d::date ORDER BY d::date`)
 	if err != nil {
 		return s, fmt.Errorf("sparkline: %w", err)
@@ -499,7 +501,7 @@ func (h *Handler) fetchReport(ctx context.Context, idStr string) (*Report, error
 	query := `SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at, summary, blast_radius
+		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
 		FROM triage.reports WHERE `
 
 	var args []interface{}
@@ -535,15 +537,15 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 	for rows.Next() {
 		var r Report
 		var causalChainJSON, evidenceJSON, recommendationsJSON []byte
-		var resolvedAt sql.NullTime
+		var resolvedAt, completedAt sql.NullTime
 
 		err := rows.Scan(
 			&r.ID, &r.WorkflowID, &r.Namespace, &r.Workload, &r.Kind, &r.AlertName,
 			&r.Classification, &r.Severity, &r.RootCause,
 			&causalChainJSON, &evidenceJSON, &recommendationsJSON,
 			&r.Confidence, &r.EscalationNeeded, &r.AlertCount,
-			&r.StartedAt, &r.CompletedAt, &r.CreatedAt, &resolvedAt,
-			&r.Summary, &r.BlastRadius,
+			&r.StartedAt, &completedAt, &r.CreatedAt, &resolvedAt,
+			&r.Summary, &r.BlastRadius, &r.State,
 		)
 		if err != nil {
 			return nil, err
@@ -551,6 +553,9 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 
 		if resolvedAt.Valid {
 			r.ResolvedAt = &resolvedAt.Time
+		}
+		if completedAt.Valid {
+			r.CompletedAt = &completedAt.Time
 		}
 
 		if len(causalChainJSON) > 0 {
@@ -646,7 +651,19 @@ func templateFuncs() template.FuncMap {
 				return "badge-ghost"
 			}
 		},
-		"timeAgo": func(t time.Time) string {
+		"timeAgo": func(v interface{}) string {
+			var t time.Time
+			switch val := v.(type) {
+			case time.Time:
+				t = val
+			case *time.Time:
+				if val == nil {
+					return "—"
+				}
+				t = *val
+			default:
+				return "—"
+			}
 			d := time.Since(t)
 			switch {
 			case d < time.Minute:

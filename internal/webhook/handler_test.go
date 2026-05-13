@@ -18,7 +18,7 @@ import (
 	"github.com/haakotsm/triage-worker/internal/types"
 )
 
-const resolvedUpdateSQL = `UPDATE triage.reports SET resolved_at = NOW() WHERE workflow_id = $1 AND resolved_at IS NULL`
+const resolvedUpdateSQL = `UPDATE triage.reports SET resolved_at = NOW(), state = 'resolved' WHERE workflow_id = $1 AND resolved_at IS NULL`
 
 // mockTemporalClient implements the minimal interface needed for webhook tests.
 // The real client.Client interface is too large to mock fully, so we test

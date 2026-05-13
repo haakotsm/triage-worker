@@ -52,8 +52,8 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 			classification, severity, root_cause, causal_chain,
 			evidence, recommendations, confidence,
 			escalation_needed, alert_count, started_at, completed_at,
-			summary, blast_radius
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			summary, blast_radius, state
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'reported')
 		ON CONFLICT (workflow_id) DO UPDATE SET
 			classification = EXCLUDED.classification,
 			severity = EXCLUDED.severity,
@@ -65,7 +65,8 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 			escalation_needed = EXCLUDED.escalation_needed,
 			completed_at = EXCLUDED.completed_at,
 			summary = EXCLUDED.summary,
-			blast_radius = EXCLUDED.blast_radius
+			blast_radius = EXCLUDED.blast_radius,
+			state = 'reported'
 	`
 
 	_, err = r.DB.ExecContext(ctx, query,
@@ -92,40 +93,35 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 		return fmt.Errorf("upsert report: %w", err)
 	}
 
-	// Transition the incident to "reported" now that the report is stored.
-	_, _ = r.DB.ExecContext(ctx,
-		`UPDATE triage.incidents SET state = 'reported', severity = $2, updated_at = NOW()
-		 WHERE workflow_id = $1`,
-		result.WorkflowID, result.Severity,
-	)
-
 	return nil
 }
 
-// UpdateIncidentState transitions an incident's lifecycle state.
-// Valid states: correlating, enriching, triaging, reported.
+// UpdateIncidentState transitions a report's lifecycle state.
+// Valid states: correlating, enriching, triaging, reported, resolved.
 func (r *ReportActivity) UpdateIncidentState(ctx context.Context, workflowID, state, severity string) error {
 	if r.DB == nil {
 		return nil
 	}
 	_, err := r.DB.ExecContext(ctx,
-		`UPDATE triage.incidents SET state = $2, severity = CASE WHEN $3 = '' THEN severity ELSE $3 END, updated_at = NOW()
+		`UPDATE triage.reports SET state = $2, severity = CASE WHEN $3 = '' THEN severity ELSE $3 END
 		 WHERE workflow_id = $1`,
 		workflowID, state, severity,
 	)
 	if err != nil {
-		return fmt.Errorf("update incident state: %w", err)
+		return fmt.Errorf("update report state: %w", err)
 	}
 	return nil
 }
 
-// CreateIncident inserts a new incident row for realtime lifecycle tracking.
+// CreateIncident inserts a preliminary report row for realtime lifecycle tracking.
+// The row is created with state='correlating' and placeholder defaults. The full
+// report data is filled in later by StoreTriageReport via UPSERT.
 func (r *ReportActivity) CreateIncident(ctx context.Context, workflowID, namespace, workload, kind, alertName string) error {
 	if r.DB == nil {
 		return nil
 	}
 	_, err := r.DB.ExecContext(ctx,
-		`INSERT INTO triage.incidents (workflow_id, namespace, workload, kind, alert_name, state)
+		`INSERT INTO triage.reports (workflow_id, namespace, workload, kind, alert_name, state)
 		 VALUES ($1, $2, $3, $4, $5, 'correlating')
 		 ON CONFLICT (workflow_id) DO NOTHING`,
 		workflowID, namespace, workload, kind, alertName,
@@ -138,7 +134,11 @@ func (r *ReportActivity) CreateIncident(ctx context.Context, workflowID, namespa
 
 // MigrateSchema creates the triage schema and reports table if they don't exist.
 func MigrateSchema(ctx context.Context, db *sql.DB) error {
-	schema := `
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Phase 1: DDL — create schema, table, indexes, add columns.
+	ddl := `
 		CREATE SCHEMA IF NOT EXISTS triage;
 
 		CREATE TABLE IF NOT EXISTS triage.reports (
@@ -148,21 +148,22 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 			workload        TEXT NOT NULL,
 			kind            TEXT NOT NULL,
 			alert_name      TEXT NOT NULL,
-			classification  TEXT NOT NULL,
-			severity        TEXT NOT NULL,
-			root_cause      TEXT NOT NULL,
+			classification  TEXT NOT NULL DEFAULT '',
+			severity        TEXT NOT NULL DEFAULT '',
+			root_cause      TEXT NOT NULL DEFAULT '',
 			causal_chain    JSONB DEFAULT '[]',
 			evidence        JSONB DEFAULT '[]',
 			recommendations JSONB DEFAULT '[]',
 			confidence      REAL NOT NULL DEFAULT 0,
 			escalation_needed BOOLEAN NOT NULL DEFAULT false,
 			alert_count     INTEGER NOT NULL DEFAULT 1,
-			started_at      TIMESTAMPTZ NOT NULL,
-			completed_at    TIMESTAMPTZ NOT NULL,
+			started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			completed_at    TIMESTAMPTZ,
 			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			resolved_at     TIMESTAMPTZ,
 			summary         TEXT NOT NULL DEFAULT '',
-			blast_radius    TEXT NOT NULL DEFAULT 'pod'
+			blast_radius    TEXT NOT NULL DEFAULT 'pod',
+			state           TEXT NOT NULL DEFAULT 'reported'
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_reports_namespace ON triage.reports (namespace);
@@ -170,56 +171,39 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_reports_severity ON triage.reports (severity);
 		CREATE INDEX IF NOT EXISTS idx_reports_created_at ON triage.reports (created_at DESC);
 
-		-- Migration: add columns if table already exists
+		-- Migration: add columns if table already exists.
 		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
 		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS blast_radius TEXT NOT NULL DEFAULT 'pod';
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'reported';
 
-		-- Incidents table: tracks workflow lifecycle for realtime dashboard.
-		CREATE TABLE IF NOT EXISTS triage.incidents (
-			id           BIGSERIAL PRIMARY KEY,
-			workflow_id  TEXT UNIQUE NOT NULL,
-			namespace    TEXT NOT NULL,
-			workload     TEXT NOT NULL,
-			kind         TEXT NOT NULL DEFAULT 'Pod',
-			alert_name   TEXT NOT NULL DEFAULT '',
-			state        TEXT NOT NULL DEFAULT 'correlating',
-			severity     TEXT NOT NULL DEFAULT '',
-			created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
+		-- Make completed_at nullable for in-flight reports.
+		ALTER TABLE triage.reports ALTER COLUMN completed_at DROP NOT NULL;
 
-		CREATE INDEX IF NOT EXISTS idx_incidents_state ON triage.incidents (state);
-		CREATE INDEX IF NOT EXISTS idx_incidents_updated ON triage.incidents (updated_at DESC);
+		-- Drop legacy incidents table if it exists (merged into reports).
+		DROP TABLE IF EXISTS triage.incidents;
+		DROP FUNCTION IF EXISTS triage.notify_incident_change() CASCADE;
+	`
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("ddl: %w", err)
+	}
 
-		-- Notify function: sends JSON payload on incident changes.
-		CREATE OR REPLACE FUNCTION triage.notify_incident_change() RETURNS trigger AS $$
-		BEGIN
-			PERFORM pg_notify('incident_changes', json_build_object(
-				'id',          NEW.id,
-				'workflow_id', NEW.workflow_id,
-				'state',       NEW.state,
-				'namespace',   NEW.namespace,
-				'workload',    NEW.workload,
-				'severity',    NEW.severity,
-				'updated_at',  NEW.updated_at
-			)::text);
-			RETURN NEW;
-		END;
-		$$ LANGUAGE plpgsql;
+	// Phase 2: DML + triggers — runs after columns are visible.
+	dml := `
+		CREATE INDEX IF NOT EXISTS idx_reports_state ON triage.reports (state);
 
-		-- Drop and recreate trigger to ensure latest version.
-		DROP TRIGGER IF EXISTS trg_incident_change ON triage.incidents;
-		CREATE TRIGGER trg_incident_change
-			AFTER INSERT OR UPDATE ON triage.incidents
-			FOR EACH ROW EXECUTE FUNCTION triage.notify_incident_change();
+		-- Backfill state for existing rows.
+		UPDATE triage.reports SET state = 'resolved' WHERE resolved_at IS NOT NULL AND state = 'reported';
 
-		-- Notify on report changes too (new report stored, resolved).
+		-- NOTIFY trigger on report changes (covers state transitions and completions).
 		CREATE OR REPLACE FUNCTION triage.notify_report_change() RETURNS trigger AS $$
 		BEGIN
 			PERFORM pg_notify('report_changes', json_build_object(
 				'id',          NEW.id,
 				'workflow_id', NEW.workflow_id,
+				'state',       NEW.state,
 				'severity',    NEW.severity,
+				'namespace',   NEW.namespace,
+				'workload',    NEW.workload,
 				'resolved',    (NEW.resolved_at IS NOT NULL)
 			)::text);
 			RETURN NEW;
@@ -231,10 +215,9 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 			AFTER INSERT OR UPDATE ON triage.reports
 			FOR EACH ROW EXECUTE FUNCTION triage.notify_report_change();
 	`
+	if _, err := db.ExecContext(ctx, dml); err != nil {
+		return fmt.Errorf("dml: %w", err)
+	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	_, err := db.ExecContext(ctx, schema)
-	return err
+	return nil
 }
