@@ -95,8 +95,8 @@ func (b *SSEBroker) Stop() {
 	b.mu.Lock()
 	for ch := range b.clients {
 		close(ch)
-		delete(b.clients, ch)
 	}
+	b.clients = nil // signal broadcast() to stop
 	b.mu.Unlock()
 }
 
@@ -135,6 +135,9 @@ func (b *SSEBroker) dispatchLoop(ctx context.Context) {
 func (b *SSEBroker) broadcast(event SSEEvent) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	if b.clients == nil {
+		return // broker stopped
+	}
 	for ch := range b.clients {
 		select {
 		case ch <- event:

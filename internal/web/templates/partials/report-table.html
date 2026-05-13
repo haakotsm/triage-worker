@@ -1,5 +1,7 @@
 {{define "report-table"}}
 <div id="report-list">
+  <input type="hidden" name="offset" value="{{.Offset}}">
+  <input type="hidden" name="limit" value="{{.Limit}}">
   <div class="overflow-x-auto">
     <table class="table table-zebra table-sm">
       <thead>
