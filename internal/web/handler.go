@@ -290,7 +290,9 @@ func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		buf.WriteTo(w)
+		if _, err := buf.WriteTo(w); err != nil {
+			h.logger.Debug("write response", "error", err, "template", name)
+		}
 		return
 	}
 	if err := h.partials.ExecuteTemplate(&buf, name, data); err != nil {
@@ -299,7 +301,9 @@ func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	buf.WriteTo(w)
+	if _, err := buf.WriteTo(w); err != nil {
+		h.logger.Debug("write response", "error", err, "template", name)
+	}
 }
 
 func (h *Handler) renderError(w http.ResponseWriter, msg string) {
