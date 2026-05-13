@@ -94,12 +94,14 @@ type StatsData struct {
 type DashboardData struct {
 	Reports    []Report
 	Stats      StatsData
+	Incidents  []Incident
 	TotalCount int
 	Limit      int
 	Offset     int
 	Query      string
 	Severity   string
 	Status     string
+	SSEEnabled bool
 }
 
 // DetailData is the template data for the report detail page.
@@ -116,6 +118,12 @@ type Handler struct {
 	static   http.Handler
 	db       *sql.DB
 	logger   *slog.Logger
+	sse      *SSEBroker // optional: nil if SSE not configured
+}
+
+// SetSSEBroker attaches an SSE broker for realtime event streaming.
+func (h *Handler) SetSSEBroker(b *SSEBroker) {
+	h.sse = b
 }
 
 // NewHandler creates a web dashboard handler.
@@ -165,12 +173,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/static/"):
 		h.static.ServeHTTP(w, r)
+	case r.URL.Path == "/events":
+		h.handleEvents(w, r)
 	case r.URL.Path == "/" || r.URL.Path == "/dashboard":
 		h.handleDashboard(w, r)
 	case r.URL.Path == "/partials/reports":
 		h.handlePartialReports(w, r)
 	case r.URL.Path == "/partials/stats":
 		h.handlePartialStats(w, r)
+	case r.URL.Path == "/partials/incidents":
+		h.handlePartialIncidents(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
 		h.handleDetail(w, r)
 	default:
@@ -343,15 +355,23 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		h.logger.Warn("fetch stats for dashboard", "error", err)
 	}
 
+	// Fetch active incidents (non-fatal if it fails).
+	incidents, err := FetchActiveIncidents(r.Context(), h.db)
+	if err != nil {
+		h.logger.Warn("fetch incidents for dashboard", "error", err)
+	}
+
 	return DashboardData{
 		Reports:    reports,
 		Stats:      stats,
+		Incidents:  incidents,
 		TotalCount: totalCount,
 		Limit:      limit,
 		Offset:     offset,
 		Query:      search,
 		Severity:   severity,
 		Status:     status,
+		SSEEnabled: h.sse != nil,
 	}, nil
 }
 
@@ -682,5 +702,54 @@ func templateFuncs() template.FuncMap {
 		"fmtPct": func(f float64) string {
 			return fmt.Sprintf("%.0f", f)
 		},
+		"incidentStateClass": func(state string) string {
+			switch state {
+			case "correlating":
+				return "badge-warning"
+			case "enriching":
+				return "badge-info"
+			case "triaging":
+				return "badge-primary"
+			case "reported":
+				return "badge-success"
+			default:
+				return "badge-ghost"
+			}
+		},
+		"formatDuration": func(t time.Time) string {
+			d := time.Since(t)
+			switch {
+			case d < time.Minute:
+				return fmt.Sprintf("%ds", int(d.Seconds()))
+			case d < time.Hour:
+				return fmt.Sprintf("%dm", int(d.Minutes()))
+			case d < 24*time.Hour:
+				return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+			default:
+				return fmt.Sprintf("%dd%dh", int(d.Hours())/24, int(d.Hours())%24)
+			}
+		},
 	}
+}
+
+// handleEvents delegates to SSE broker or returns 503 if unavailable.
+func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if h.sse == nil {
+		http.Error(w, "SSE not available", http.StatusServiceUnavailable)
+		return
+	}
+	h.sse.ServeHTTP(w, r)
+}
+
+// handlePartialIncidents renders just the incidents table fragment for htmx.
+func (h *Handler) handlePartialIncidents(w http.ResponseWriter, r *http.Request) {
+	incidents, err := FetchActiveIncidents(r.Context(), h.db)
+	if err != nil {
+		h.logger.Error("fetch incidents", "error", err)
+		h.renderError(w, "Failed to load incidents")
+		return
+	}
+	h.render(w, "incidents-table", map[string]interface{}{
+		"Incidents": incidents,
+	})
 }

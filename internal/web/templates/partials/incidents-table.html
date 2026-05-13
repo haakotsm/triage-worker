@@ -1,0 +1,60 @@
+{{define "incidents-table"}}
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body py-3 px-4">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="font-semibold text-base-content flex items-center gap-2">
+        <span class="loading loading-ring loading-sm text-warning"></span>
+        Active Incidents
+        <span class="badge badge-sm badge-ghost">{{len .Incidents}}</span>
+      </h3>
+      <span class="text-xs text-base-content/50 font-mono"
+            hx-get="/partials/incidents" hx-trigger="every 10s" hx-target="#incidents-panel" hx-swap="innerHTML">
+        auto-refresh
+      </span>
+    </div>
+    {{if .Incidents}}
+    <div class="overflow-x-auto">
+      <table class="table table-xs">
+        <thead>
+          <tr class="text-base-content/70">
+            <th>State</th>
+            <th>Workload</th>
+            <th>Namespace</th>
+            <th>Alert</th>
+            <th>Age</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Incidents}}
+          <tr class="hover">
+            <td>
+              <div class="flex items-center gap-2">
+                {{if eq .State "correlating"}}
+                  <span class="loading loading-dots loading-xs text-warning"></span>
+                {{else if eq .State "enriching"}}
+                  <span class="loading loading-spinner loading-xs text-info"></span>
+                {{else if eq .State "triaging"}}
+                  <span class="loading loading-spinner loading-xs text-primary"></span>
+                {{else}}
+                  <span class="text-success">✓</span>
+                {{end}}
+                <span class="badge badge-xs {{incidentStateClass .State}}">{{.State}}</span>
+              </div>
+            </td>
+            <td class="font-mono text-xs">{{.Workload}}</td>
+            <td class="text-xs text-base-content/70">{{.Namespace}}</td>
+            <td class="text-xs">{{.AlertName}}</td>
+            <td class="text-xs text-base-content/50 font-mono">
+              {{formatDuration .CreatedAt}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <p class="text-sm text-base-content/50 py-2">No active incidents</p>
+    {{end}}
+  </div>
+</div>
+{{end}}

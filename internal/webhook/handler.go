@@ -161,6 +161,17 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	for wfID, alerts := range alertsByWorkflow {
 		identity := identitiesByWorkflow[wfID]
+
+		// Create incident row for realtime lifecycle tracking (best-effort).
+		if h.db != nil {
+			_, _ = h.db.ExecContext(ctx,
+				`INSERT INTO triage.incidents (workflow_id, namespace, workload, kind, alert_name, state)
+				 VALUES ($1, $2, $3, $4, $5, 'correlating')
+				 ON CONFLICT (workflow_id) DO NOTHING`,
+				wfID, identity.Namespace, identity.Name, identity.Kind, identity.AlertName,
+			)
+		}
+
 		if err := h.signalWithStart(ctx, wfID, identity, alerts); err != nil {
 			h.logger.Error("signal-with-start failed",
 				"workflow_id", wfID,
@@ -254,6 +265,9 @@ func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGro
 			h.logger.Error("failed to mark report resolved", "workflow_id", wfID, "error", err)
 			continue
 		}
+		// Clean up incident row — report is the permanent record.
+		_, _ = h.db.ExecContext(ctx,
+			`DELETE FROM triage.incidents WHERE workflow_id = $1`, wfID)
 		if n, _ := result.RowsAffected(); n > 0 {
 			h.logger.Info("report resolved", "workflow_id", wfID)
 			updated++

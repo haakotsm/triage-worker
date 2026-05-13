@@ -152,6 +152,17 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("create web handler: %w", err)
 		}
+
+		// SSE broker for realtime updates (requires DATABASE_URL for PG LISTEN).
+		sseBroker := web.NewSSEBroker(db, databaseURL, logger)
+		if err := sseBroker.Start(ctx); err != nil {
+			logger.Warn("SSE broker failed to start — realtime disabled", "error", err)
+		} else {
+			wh.SetSSEBroker(sseBroker)
+			defer sseBroker.Stop()
+			logger.Info("SSE broker started")
+		}
+
 		webHandler = wh
 		logger.Info("web dashboard enabled")
 	}

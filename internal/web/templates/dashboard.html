@@ -3,10 +3,34 @@
 {{end}}
 
 {{define "content"}}
-<div class="flex flex-col gap-6">
+<div class="flex flex-col gap-6"
+     {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}>
+
+  {{/* SSE connection indicator */}}
+  {{if .SSEEnabled}}
+  <div x-data="{ connected: false, init() {
+    this.$el.closest('[sse-connect]').addEventListener('htmx:sseOpen', () => this.connected = true);
+    this.$el.closest('[sse-connect]').addEventListener('htmx:sseClose', () => this.connected = false);
+    this.$el.closest('[sse-connect]').addEventListener('htmx:sseError', () => this.connected = false);
+  }}" class="fixed bottom-4 right-4 z-50">
+    <div class="badge badge-sm gap-1" :class="connected ? 'badge-success' : 'badge-error'">
+      <span class="inline-block w-2 h-2 rounded-full" :class="connected ? 'bg-success animate-pulse' : 'bg-error'"></span>
+      <span x-text="connected ? 'Live' : 'Reconnecting...'" class="text-xs"></span>
+    </div>
+  </div>
+  {{end}}
 
   {{/* ═══ ROW 1: KPI Stats + Severity Gauges (Z1 → Z2) ═══ */}}
-  {{template "stats-panel" .Stats}}
+  <div id="stats-panel"
+       hx-get="/partials/stats" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:incident-update, {{end}}every 30s" hx-swap="innerHTML">
+    {{template "stats-panel" .Stats}}
+  </div>
+
+  {{/* ═══ ACTIVE INCIDENTS ═══ */}}
+  <div id="incidents-panel"
+       hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, {{end}}every 10s" hx-swap="innerHTML">
+    {{template "incidents-table" .}}
+  </div>
 
   {{/* ═══ DIVIDER ═══ */}}
   <div class="divider divider-neutral my-0 opacity-30"></div>
@@ -54,8 +78,11 @@
         </div>
       </div>
 
-      {{/* Report table — id="report-list" is on the partial's root div */}}
-      {{template "report-table" .}}
+      {{/* Report table — refreshes on SSE report events */}}
+      <div id="report-list-wrap"
+           hx-get="/partials/reports" hx-trigger="{{if .SSEEnabled}}sse:report-update, {{end}}every 30s" hx-target="#report-list" hx-swap="innerHTML">
+        {{template "report-table" .}}
+      </div>
     </div>
   </div>
 </div>

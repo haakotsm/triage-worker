@@ -1,0 +1,270 @@
+package web
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/lib/pq"
+)
+
+const (
+	maxSSEClients       = 100
+	sseReconnectTimeout = 3 * time.Second
+	channelIncidents    = "incident_changes"
+	channelReports      = "report_changes"
+)
+
+// SSEBroker manages Server-Sent Events with PG LISTEN/NOTIFY fan-out.
+type SSEBroker struct {
+	mu        sync.RWMutex
+	clients   map[chan SSEEvent]struct{}
+	logger    *slog.Logger
+	db        *sql.DB
+	dsn       string
+	listener  *pq.Listener
+	cancelCtx context.CancelFunc
+}
+
+// SSEEvent represents a named event sent to clients.
+type SSEEvent struct {
+	Name string // SSE event name (e.g. "incident-update", "report-update")
+	Data string // JSON payload
+}
+
+// IncidentNotification is the payload from PG NOTIFY on incident_changes.
+type IncidentNotification struct {
+	ID         int64  `json:"id"`
+	WorkflowID string `json:"workflow_id"`
+	State      string `json:"state"`
+	Namespace  string `json:"namespace"`
+	Workload   string `json:"workload"`
+	Severity   string `json:"severity"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+// NewSSEBroker creates a broker. Call Start() to begin listening.
+func NewSSEBroker(db *sql.DB, dsn string, logger *slog.Logger) *SSEBroker {
+	return &SSEBroker{
+		clients: make(map[chan SSEEvent]struct{}),
+		logger:  logger,
+		db:      db,
+		dsn:     dsn,
+	}
+}
+
+// Start begins PG LISTEN and event dispatch. Call Stop() to clean up.
+func (b *SSEBroker) Start(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	b.cancelCtx = cancel
+
+	reportProblem := func(ev pq.ListenerEventType, err error) {
+		if err != nil {
+			b.logger.Error("pg listener error", "event", ev, "error", err)
+		}
+	}
+
+	b.listener = pq.NewListener(b.dsn, 10*time.Second, time.Minute, reportProblem)
+
+	if err := b.listener.Listen(channelIncidents); err != nil {
+		cancel()
+		return fmt.Errorf("listen %s: %w", channelIncidents, err)
+	}
+	if err := b.listener.Listen(channelReports); err != nil {
+		cancel()
+		return fmt.Errorf("listen %s: %w", channelReports, err)
+	}
+
+	b.logger.Info("SSE broker started", "channels", []string{channelIncidents, channelReports})
+
+	go b.dispatchLoop(ctx)
+	return nil
+}
+
+// Stop shuts down the PG listener and closes all client channels.
+func (b *SSEBroker) Stop() {
+	if b.cancelCtx != nil {
+		b.cancelCtx()
+	}
+	if b.listener != nil {
+		_ = b.listener.Close()
+	}
+	b.mu.Lock()
+	for ch := range b.clients {
+		close(ch)
+		delete(b.clients, ch)
+	}
+	b.mu.Unlock()
+}
+
+func (b *SSEBroker) dispatchLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case n := <-b.listener.Notify:
+			if n == nil {
+				// Connection lost, reconnect handled by pq.Listener
+				continue
+			}
+			event := SSEEvent{}
+			switch n.Channel {
+			case channelIncidents:
+				event.Name = "incident-update"
+				event.Data = n.Extra
+			case channelReports:
+				event.Name = "report-update"
+				event.Data = n.Extra
+			default:
+				continue
+			}
+			b.broadcast(event)
+		}
+	}
+}
+
+func (b *SSEBroker) broadcast(event SSEEvent) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for ch := range b.clients {
+		select {
+		case ch <- event:
+		default:
+			// Slow client, drop event (non-blocking)
+		}
+	}
+}
+
+// subscribe adds a client. Returns the event channel and an unsubscribe func.
+func (b *SSEBroker) subscribe() (chan SSEEvent, func(), error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.clients) >= maxSSEClients {
+		return nil, nil, fmt.Errorf("max SSE clients reached (%d)", maxSSEClients)
+	}
+	ch := make(chan SSEEvent, 16)
+	b.clients[ch] = struct{}{}
+	unsub := func() {
+		b.mu.Lock()
+		delete(b.clients, ch)
+		b.mu.Unlock()
+	}
+	return ch, unsub, nil
+}
+
+// ClientCount returns the number of active SSE clients.
+func (b *SSEBroker) ClientCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.clients)
+}
+
+// ServeHTTP handles the /events SSE endpoint.
+func (b *SSEBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	ch, unsub, err := b.subscribe()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer unsub()
+
+	// Disable WriteTimeout for this long-lived connection (Go 1.20+).
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // nginx/ingress
+
+	// Send initial connection event.
+	fmt.Fprintf(w, "event: connected\ndata: {\"clients\":%d}\n\n", b.ClientCount())
+	flusher.Flush()
+
+	// Keepalive ticker to detect dead connections.
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-ch:
+			if !ok {
+				return // broker shutting down
+			}
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Name, event.Data)
+			flusher.Flush()
+		case <-ticker.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// Incident represents an in-flight incident for the dashboard.
+type Incident struct {
+	ID         int64     `json:"id"`
+	WorkflowID string    `json:"workflow_id"`
+	Namespace  string    `json:"namespace"`
+	Workload   string    `json:"workload"`
+	Kind       string    `json:"kind"`
+	AlertName  string    `json:"alert_name"`
+	State      string    `json:"state"`
+	Severity   string    `json:"severity"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// FetchActiveIncidents queries the incidents table for in-flight workflows.
+func FetchActiveIncidents(ctx context.Context, db *sql.DB) ([]Incident, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at, updated_at
+		 FROM triage.incidents
+		 ORDER BY updated_at DESC
+		 LIMIT 50`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var incidents []Incident
+	for rows.Next() {
+		var inc Incident
+		if err := rows.Scan(&inc.ID, &inc.WorkflowID, &inc.Namespace, &inc.Workload,
+			&inc.Kind, &inc.AlertName, &inc.State, &inc.Severity,
+			&inc.CreatedAt, &inc.UpdatedAt); err != nil {
+			return nil, err
+		}
+		incidents = append(incidents, inc)
+	}
+	return incidents, rows.Err()
+}
+
+// BroadcastStatsUpdate queries fresh stats and broadcasts to all SSE clients.
+func (b *SSEBroker) BroadcastStatsUpdate(ctx context.Context) {
+	if b.db == nil {
+		return
+	}
+	type statsPayload struct {
+		TotalReports int `json:"total_reports"`
+		ActiveCount  int `json:"active_incidents"`
+	}
+	var s statsPayload
+	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports`).Scan(&s.TotalReports)
+	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.incidents`).Scan(&s.ActiveCount)
+	data, _ := json.Marshal(s)
+	b.broadcast(SSEEvent{Name: "stats-update", Data: string(data)})
+}
