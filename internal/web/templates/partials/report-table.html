@@ -21,9 +21,9 @@
           <td><span class="badge {{severityClass .Severity}} badge-sm">{{.Severity}}</span></td>
           <td class="font-mono text-sm">{{.Workload}}</td>
           <td>{{.Namespace}}</td>
-          <td class="max-w-xs">
+          <td class="max-w-sm">
             <div class="text-sm font-medium">{{.AlertName}}</div>
-            {{if .Summary}}<div class="text-xs text-base-content/60 truncate max-w-xs">{{.Summary}}</div>{{end}}
+            {{if .Summary}}<div class="text-xs text-base-content/60 line-clamp-2">{{.Summary}}</div>{{end}}
           </td>
           <td class="whitespace-nowrap">{{blastDots .BlastRadius}} <span class="text-xs">{{.BlastRadius}}</span></td>
           <td class="text-sm whitespace-nowrap">{{timeAgo .CompletedAt}}</td>
