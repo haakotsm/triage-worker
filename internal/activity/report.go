@@ -98,13 +98,29 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 
 // UpdateIncidentState transitions a report's lifecycle state.
 // Valid states: correlating, enriching, triaging, reported, resolved.
+// State can only move forward (monotonic) to prevent backward transitions from retries.
 func (r *ReportActivity) UpdateIncidentState(ctx context.Context, workflowID, state, severity string) error {
 	if r.DB == nil {
 		return nil
 	}
 	_, err := r.DB.ExecContext(ctx,
 		`UPDATE triage.reports SET state = $2, severity = CASE WHEN $3 = '' THEN severity ELSE $3 END
-		 WHERE workflow_id = $1`,
+		 WHERE workflow_id = $1
+		   AND CASE state
+		     WHEN 'correlating' THEN 1
+		     WHEN 'enriching'   THEN 2
+		     WHEN 'triaging'    THEN 3
+		     WHEN 'reported'    THEN 4
+		     WHEN 'resolved'    THEN 5
+		     ELSE 0
+		   END < CASE $2::text
+		     WHEN 'correlating' THEN 1
+		     WHEN 'enriching'   THEN 2
+		     WHEN 'triaging'    THEN 3
+		     WHEN 'reported'    THEN 4
+		     WHEN 'resolved'    THEN 5
+		     ELSE 0
+		   END`,
 		workflowID, state, severity,
 	)
 	if err != nil {
@@ -179,6 +195,13 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		-- Make completed_at nullable for in-flight reports.
 		ALTER TABLE triage.reports ALTER COLUMN completed_at DROP NOT NULL;
 
+		-- Enforce valid lifecycle states.
+		DO $$ BEGIN
+			ALTER TABLE triage.reports ADD CONSTRAINT chk_state
+				CHECK (state IN ('correlating','enriching','triaging','reported','resolved'));
+		EXCEPTION WHEN duplicate_object THEN NULL;
+		END $$;
+
 		-- Drop legacy incidents table if it exists (merged into reports).
 		DROP TABLE IF EXISTS triage.incidents;
 		DROP FUNCTION IF EXISTS triage.notify_incident_change() CASCADE;
@@ -191,21 +214,29 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 	dml := `
 		CREATE INDEX IF NOT EXISTS idx_reports_state ON triage.reports (state);
 
+		-- Composite index for dashboard queries (filter by state, sort by created_at).
+		CREATE INDEX IF NOT EXISTS idx_reports_state_created ON triage.reports (state, created_at DESC);
+
 		-- Backfill state for existing rows.
 		UPDATE triage.reports SET state = 'resolved' WHERE resolved_at IS NOT NULL AND state = 'reported';
 
-		-- NOTIFY trigger on report changes (covers state transitions and completions).
+		-- NOTIFY trigger on report changes — only fires when tracked columns change.
 		CREATE OR REPLACE FUNCTION triage.notify_report_change() RETURNS trigger AS $$
 		BEGIN
-			PERFORM pg_notify('report_changes', json_build_object(
-				'id',          NEW.id,
-				'workflow_id', NEW.workflow_id,
-				'state',       NEW.state,
-				'severity',    NEW.severity,
-				'namespace',   NEW.namespace,
-				'workload',    NEW.workload,
-				'resolved',    (NEW.resolved_at IS NOT NULL)
-			)::text);
+			IF TG_OP = 'INSERT' OR
+			   OLD.state IS DISTINCT FROM NEW.state OR
+			   OLD.severity IS DISTINCT FROM NEW.severity OR
+			   OLD.resolved_at IS DISTINCT FROM NEW.resolved_at THEN
+				PERFORM pg_notify('report_changes', json_build_object(
+					'id',          NEW.id,
+					'workflow_id', NEW.workflow_id,
+					'state',       NEW.state,
+					'severity',    NEW.severity,
+					'namespace',   NEW.namespace,
+					'workload',    NEW.workload,
+					'resolved',    (NEW.resolved_at IS NOT NULL)
+				)::text);
+			END IF;
 			RETURN NEW;
 		END;
 		$$ LANGUAGE plpgsql;

@@ -28,6 +28,7 @@ type SSEBroker struct {
 	dsn       string
 	listener  *pq.Listener
 	cancelCtx context.CancelFunc
+	wg        sync.WaitGroup // tracks dispatchLoop goroutine
 }
 
 // SSEEvent represents a named event sent to clients.
@@ -77,6 +78,7 @@ func (b *SSEBroker) Start(ctx context.Context) error {
 
 	b.logger.Info("SSE broker started", "channel", channelReports)
 
+	b.wg.Add(1)
 	go b.dispatchLoop(ctx)
 	return nil
 }
@@ -86,6 +88,7 @@ func (b *SSEBroker) Stop() {
 	if b.cancelCtx != nil {
 		b.cancelCtx()
 	}
+	b.wg.Wait() // wait for dispatchLoop to exit before closing channels
 	if b.listener != nil {
 		_ = b.listener.Close()
 	}
@@ -98,12 +101,16 @@ func (b *SSEBroker) Stop() {
 }
 
 func (b *SSEBroker) dispatchLoop(ctx context.Context) {
+	defer b.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case n := <-b.listener.Notify:
 			if n == nil {
+				// PG listener reconnected — notifications during disconnect are lost.
+				// Broadcast refresh so frontends know to refetch.
+				b.broadcast(SSEEvent{Name: "refresh", Data: `{"reason":"reconnect"}`})
 				continue
 			}
 			if n.Channel != channelReports {

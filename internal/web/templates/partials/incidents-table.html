@@ -7,8 +7,7 @@
         Active Incidents
         <span class="badge badge-sm badge-ghost">{{len .Incidents}}</span>
       </h3>
-      <span class="text-xs text-base-content/50 font-mono"
-            hx-get="/partials/incidents" hx-trigger="every 10s" hx-target="#incidents-panel" hx-swap="innerHTML">
+      <span class="text-xs text-base-content/50 font-mono">
         auto-refresh
       </span>
     </div>

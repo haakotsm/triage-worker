@@ -1,6 +1,5 @@
 {{define "report-table"}}
-<div id="report-list" hx-get="/partials/reports" hx-trigger="every 30s" hx-swap="outerHTML"
-     hx-include="[name='search'],[name='severity'],[name='status']">
+<div id="report-list">
   <div class="overflow-x-auto">
     <table class="table table-zebra table-sm">
       <thead>
@@ -16,8 +15,9 @@
       </thead>
       <tbody>
         {{range .Reports}}
-        <tr class="hover cursor-pointer" tabindex="0" role="link"
-            hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true">
+        <tr class="hover cursor-pointer" tabindex="0"
+            hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true"
+            hx-trigger="click, keyup[key=='Enter']">
           <td><span class="badge {{severityClass .Severity}} badge-sm">{{.Severity}}</span></td>
           <td class="font-mono text-sm">{{.Workload}}</td>
           <td>{{.Namespace}}</td>
@@ -57,6 +57,7 @@
       <button class="join-item btn btn-sm" aria-label="Previous page"
               hx-get="/partials/reports?offset={{sub .Offset .Limit}}&limit={{.Limit}}"
               hx-target="#report-list"
+              hx-swap="outerHTML"
               hx-include="[name='search'],[name='severity'],[name='status']">«</button>
       {{end}}
       <button class="join-item btn btn-sm btn-disabled">
@@ -66,6 +67,7 @@
       <button class="join-item btn btn-sm" aria-label="Next page"
               hx-get="/partials/reports?offset={{add .Offset .Limit}}&limit={{.Limit}}"
               hx-target="#report-list"
+              hx-swap="outerHTML"
               hx-include="[name='search'],[name='severity'],[name='status']">»</button>
       {{end}}
     </div>

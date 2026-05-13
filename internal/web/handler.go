@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -171,6 +172,14 @@ func NewHandler(db *sql.DB, logger *slog.Logger) (*Handler, error) {
 
 // ServeHTTP routes dashboard requests.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Security headers on all dashboard responses.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/static/"):
 		h.static.ServeHTTP(w, r)
@@ -272,17 +281,25 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	var buf bytes.Buffer
 	// Full-page renders use per-page template sets; partials use shared set
 	if tmpl, ok := h.pages[name]; ok {
-		if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
+		if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 			h.logger.Error("render page", "error", err, "template", name)
+			h.renderError(w, "Internal error")
+			return
 		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		buf.WriteTo(w)
 		return
 	}
-	if err := h.partials.ExecuteTemplate(w, name, data); err != nil {
+	if err := h.partials.ExecuteTemplate(&buf, name, data); err != nil {
 		h.logger.Error("render partial", "error", err, "template", name)
+		h.renderError(w, "Internal error")
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	buf.WriteTo(w)
 }
 
 func (h *Handler) renderError(w http.ResponseWriter, msg string) {

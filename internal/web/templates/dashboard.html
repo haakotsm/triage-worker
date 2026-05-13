@@ -22,13 +22,13 @@
 
   {{/* ═══ ROW 1: KPI Stats + Severity Gauges (Z1 → Z2) ═══ */}}
   <div id="stats-panel"
-       hx-get="/partials/stats" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:incident-update, {{end}}every 30s" hx-swap="innerHTML">
+       hx-get="/partials/stats" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:incident-update, sse:stats-update, sse:refresh, {{end}}every 30s" hx-swap="innerHTML">
     {{template "stats-panel" .Stats}}
   </div>
 
   {{/* ═══ ACTIVE INCIDENTS ═══ */}}
   <div id="incidents-panel"
-       hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, {{end}}every 10s" hx-swap="innerHTML">
+       hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:refresh, {{end}}every 10s" hx-swap="innerHTML">
     {{template "incidents-table" .}}
   </div>
 
@@ -78,9 +78,11 @@
         </div>
       </div>
 
-      {{/* Report table — refreshes on SSE report events */}}
+      {{/* Report table — refreshes on SSE report events, preserving current page offset */}}
       <div id="report-list-wrap"
-           hx-get="/partials/reports" hx-trigger="{{if .SSEEnabled}}sse:report-update, {{end}}every 30s" hx-target="#report-list" hx-swap="innerHTML">
+           hx-get="/partials/reports" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:refresh, {{end}}every 30s" hx-target="#report-list" hx-swap="outerHTML"
+           hx-include="[name='search'],[name='severity'],[name='status']"
+           hx-vals='{"offset":"{{.Offset}}","limit":"{{.Limit}}"}'>
         {{template "report-table" .}}
       </div>
     </div>
