@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,9 +56,44 @@ type Recommendation struct {
 	Expected string
 }
 
+// NameCount holds a label and its count for chart data.
+type NameCount struct {
+	Name  string
+	Count int
+	Pct   float64
+}
+
+// StatsData provides aggregated metrics for dashboard charts.
+type StatsData struct {
+	ActiveCount    int
+	ResolvedCount  int
+	EscalatedCount int
+	CriticalCount  int
+	WarningCount   int
+	InfoCount      int
+	TotalCount     int
+
+	BlastCluster    int
+	BlastNamespace  int
+	BlastDeployment int
+	BlastPod        int
+
+	Classifications []NameCount
+
+	MTTRSeconds float64
+	MTTRDisplay string
+
+	ResolutionRate float64
+
+	// Sparkline data: daily counts for last 14 days.
+	DailyCounts     []int
+	SparklinePoints string
+}
+
 // DashboardData is the template data for the dashboard page.
 type DashboardData struct {
 	Reports    []Report
+	Stats      StatsData
 	TotalCount int
 	Limit      int
 	Offset     int
@@ -75,21 +111,39 @@ type DetailData struct {
 
 // Handler serves the web dashboard and static assets.
 type Handler struct {
-	templates *template.Template
-	static    http.Handler
-	db        *sql.DB
-	logger    *slog.Logger
+	pages    map[string]*template.Template // per-page template sets (clone of shared + page-specific)
+	partials *template.Template            // shared partials for htmx fragment renders
+	static   http.Handler
+	db       *sql.DB
+	logger   *slog.Logger
 }
 
 // NewHandler creates a web dashboard handler.
 func NewHandler(db *sql.DB, logger *slog.Logger) (*Handler, error) {
-	tmpl, err := template.New("").Funcs(templateFuncs()).ParseFS(content,
-		"templates/*.html",
+	funcs := templateFuncs()
+
+	// Parse shared templates: layout + partials + components
+	shared, err := template.New("").Funcs(funcs).ParseFS(content,
+		"templates/layout.html",
 		"templates/partials/*.html",
 		"templates/components/*.html",
 	)
 	if err != nil {
-		return nil, fmt.Errorf("parse templates: %w", err)
+		return nil, fmt.Errorf("parse shared templates: %w", err)
+	}
+
+	// Clone per page so each gets its own "content" definition
+	pages := make(map[string]*template.Template)
+	for _, page := range []string{"dashboard", "detail"} {
+		clone, cloneErr := shared.Clone()
+		if cloneErr != nil {
+			return nil, fmt.Errorf("clone templates for %s: %w", page, cloneErr)
+		}
+		pageTmpl, parseErr := clone.ParseFS(content, "templates/"+page+".html")
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse %s template: %w", page, parseErr)
+		}
+		pages[page] = pageTmpl
 	}
 
 	staticFS, err := fs.Sub(content, "static")
@@ -98,10 +152,11 @@ func NewHandler(db *sql.DB, logger *slog.Logger) (*Handler, error) {
 	}
 
 	return &Handler{
-		templates: tmpl,
-		static:    http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))),
-		db:        db,
-		logger:    logger,
+		pages:    pages,
+		partials: shared,
+		static:   http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))),
+		db:       db,
+		logger:   logger,
 	}, nil
 }
 
@@ -114,6 +169,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDashboard(w, r)
 	case r.URL.Path == "/partials/reports":
 		h.handlePartialReports(w, r)
+	case r.URL.Path == "/partials/stats":
+		h.handlePartialStats(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
 		h.handleDetail(w, r)
 	default:
@@ -148,6 +205,16 @@ func (h *Handler) handlePartialReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, "report-table", data)
+}
+
+func (h *Handler) handlePartialStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.fetchStats(r.Context())
+	if err != nil {
+		h.logger.Error("fetch stats", "error", err)
+		h.renderError(w, "Failed to load stats")
+		return
+	}
+	h.render(w, "stats-panel", stats)
 }
 
 func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
@@ -193,15 +260,22 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.templates.ExecuteTemplate(w, name, data); err != nil {
-		h.logger.Error("render template", "error", err, "template", name)
+	// Full-page renders use per-page template sets; partials use shared set
+	if tmpl, ok := h.pages[name]; ok {
+		if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
+			h.logger.Error("render page", "error", err, "template", name)
+		}
+		return
+	}
+	if err := h.partials.ExecuteTemplate(w, name, data); err != nil {
+		h.logger.Error("render partial", "error", err, "template", name)
 	}
 }
 
 func (h *Handler) renderError(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusInternalServerError)
-	_ = h.templates.ExecuteTemplate(w, "error", map[string]string{"Message": msg})
+	_ = h.partials.ExecuteTemplate(w, "error", map[string]string{"Message": msg})
 }
 
 // fetchDashboardData queries reports for the dashboard.
@@ -257,8 +331,15 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		return DashboardData{}, fmt.Errorf("query: %w", err)
 	}
 
+	// Fetch aggregate stats (non-fatal if it fails).
+	stats, err := h.fetchStats(r.Context())
+	if err != nil {
+		h.logger.Warn("fetch stats for dashboard", "error", err)
+	}
+
 	return DashboardData{
 		Reports:    reports,
+		Stats:      stats,
 		TotalCount: totalCount,
 		Limit:      limit,
 		Offset:     offset,
@@ -266,6 +347,120 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		Severity:   severity,
 		Status:     status,
 	}, nil
+}
+
+// fetchStats runs aggregate queries for KPI cards and charts.
+func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
+	var s StatsData
+
+	// Single query for all counts using PostgreSQL FILTER.
+	err := h.db.QueryRowContext(ctx, `SELECT
+		COUNT(*) FILTER (WHERE resolved_at IS NULL),
+		COUNT(*) FILTER (WHERE resolved_at IS NOT NULL),
+		COUNT(*) FILTER (WHERE escalation_needed = true AND resolved_at IS NULL),
+		COUNT(*) FILTER (WHERE severity = 'critical' AND resolved_at IS NULL),
+		COUNT(*) FILTER (WHERE severity = 'warning' AND resolved_at IS NULL),
+		COUNT(*) FILTER (WHERE severity = 'info' AND resolved_at IS NULL),
+		COUNT(*),
+		COUNT(*) FILTER (WHERE blast_radius = 'cluster' AND resolved_at IS NULL),
+		COUNT(*) FILTER (WHERE blast_radius = 'namespace' AND resolved_at IS NULL),
+		COUNT(*) FILTER (WHERE blast_radius = 'deployment' AND resolved_at IS NULL),
+		COUNT(*) FILTER (WHERE blast_radius = 'pod' AND resolved_at IS NULL),
+		COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - started_at))) FILTER (WHERE resolved_at IS NOT NULL), 0)
+		FROM triage.reports`).Scan(
+		&s.ActiveCount, &s.ResolvedCount, &s.EscalatedCount,
+		&s.CriticalCount, &s.WarningCount, &s.InfoCount, &s.TotalCount,
+		&s.BlastCluster, &s.BlastNamespace, &s.BlastDeployment, &s.BlastPod,
+		&s.MTTRSeconds,
+	)
+	if err != nil {
+		return s, fmt.Errorf("stats counts: %w", err)
+	}
+
+	s.MTTRDisplay = formatDuration(s.MTTRSeconds)
+	if s.TotalCount > 0 {
+		s.ResolutionRate = float64(s.ResolvedCount) / float64(s.TotalCount) * 100
+	}
+
+	// Classification breakdown (active only).
+	classRows, err := h.db.QueryContext(ctx, `SELECT classification, COUNT(*) as cnt
+		FROM triage.reports WHERE resolved_at IS NULL
+		GROUP BY classification ORDER BY cnt DESC`)
+	if err != nil {
+		return s, fmt.Errorf("classification: %w", err)
+	}
+	defer classRows.Close()
+	for classRows.Next() {
+		var nc NameCount
+		if err := classRows.Scan(&nc.Name, &nc.Count); err != nil {
+			return s, fmt.Errorf("scan classification: %w", err)
+		}
+		if s.ActiveCount > 0 {
+			nc.Pct = float64(nc.Count) / float64(s.ActiveCount) * 100
+		}
+		s.Classifications = append(s.Classifications, nc)
+	}
+	if err := classRows.Err(); err != nil {
+		return s, fmt.Errorf("classification rows: %w", err)
+	}
+
+	// Daily counts for sparkline (last 14 days).
+	sparkRows, err := h.db.QueryContext(ctx, `SELECT d::date, COUNT(r.id)
+		FROM generate_series(CURRENT_DATE - INTERVAL '13 days', CURRENT_DATE, '1 day') AS d
+		LEFT JOIN triage.reports r ON r.created_at::date = d::date
+		GROUP BY d::date ORDER BY d::date`)
+	if err != nil {
+		return s, fmt.Errorf("sparkline: %w", err)
+	}
+	defer sparkRows.Close()
+	for sparkRows.Next() {
+		var day time.Time
+		var cnt int
+		if err := sparkRows.Scan(&day, &cnt); err != nil {
+			return s, fmt.Errorf("scan sparkline: %w", err)
+		}
+		s.DailyCounts = append(s.DailyCounts, cnt)
+	}
+	if err := sparkRows.Err(); err != nil {
+		return s, fmt.Errorf("sparkline rows: %w", err)
+	}
+
+	s.SparklinePoints = computeSparkline(s.DailyCounts, 200, 50)
+	return s, nil
+}
+
+func formatDuration(seconds float64) string {
+	if seconds <= 0 {
+		return "—"
+	}
+	d := time.Duration(seconds) * time.Second
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%.1fh", d.Hours())
+}
+
+func computeSparkline(counts []int, width, height int) string {
+	if len(counts) == 0 {
+		return fmt.Sprintf("0,%d %d,%d", height, width, height)
+	}
+	maxVal := 1
+	for _, c := range counts {
+		if c > maxVal {
+			maxVal = c
+		}
+	}
+	step := float64(width) / float64(len(counts)-1)
+	pts := make([]string, len(counts))
+	for i, c := range counts {
+		x := float64(i) * step
+		y := float64(height) - (float64(c)/float64(maxVal))*float64(height)*0.85
+		pts[i] = fmt.Sprintf("%.0f,%.0f", x, math.Max(y, 2))
+	}
+	return strings.Join(pts, " ")
 }
 
 // fetchReport queries a single report by ID or workflow_id.
@@ -459,6 +654,21 @@ func templateFuncs() template.FuncMap {
 				return 0
 			}
 			return (total + perPage - 1) / perPage
+		},
+		"blastDots": func(b string) template.HTML {
+			switch b {
+			case "cluster":
+				return template.HTML(`<span class="text-error">●●●●</span>`)
+			case "namespace":
+				return template.HTML(`<span class="text-warning">●●●</span>`)
+			case "deployment":
+				return template.HTML(`<span class="text-info">●●</span>`)
+			default:
+				return template.HTML(`<span class="text-success">●</span>`)
+			}
+		},
+		"fmtPct": func(f float64) string {
+			return fmt.Sprintf("%.0f", f)
 		},
 	}
 }

@@ -3,43 +3,61 @@
 {{end}}
 
 {{define "content"}}
-<div class="flex flex-col gap-4">
-  {{/* Filters */}}
-  <div class="card bg-base-100 shadow-sm">
-    <div class="card-body py-3">
-      <form hx-get="/partials/reports" hx-target="#report-list"
-            class="flex flex-wrap gap-3 items-end">
-        <input type="text" name="search" placeholder="Search workload, namespace, alert..."
-               class="input input-bordered input-sm w-64"
-               value="{{.Query}}"
-               hx-get="/partials/reports" hx-trigger="keyup changed delay:300ms"
-               hx-target="#report-list"
-               hx-include="[name='severity'],[name='status']">
-        <select name="severity" class="select select-bordered select-sm"
-                hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
-                hx-include="[name='search'],[name='status']">
-          <option value="">All Severities</option>
-          <option value="critical" {{if eq .Severity "critical"}}selected{{end}}>🔴 Critical</option>
-          <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>🟡 Warning</option>
-          <option value="info" {{if eq .Severity "info"}}selected{{end}}>🔵 Info</option>
-        </select>
-        <select name="status" class="select select-bordered select-sm"
-                hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
-                hx-include="[name='search'],[name='severity']">
-          <option value="">All Status</option>
-          <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
-          <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
-        </select>
-        <span class="text-sm text-base-content/60" id="report-count">
-          {{.TotalCount}} report{{if ne .TotalCount 1}}s{{end}}
-        </span>
-      </form>
-    </div>
-  </div>
+<div class="flex flex-col gap-6">
 
-  {{/* Report table */}}
-  <div id="report-list">
-    {{template "report-table" .}}
+  {{/* ═══ ROW 1: KPI Stats + Severity Gauges (Z1 → Z2) ═══ */}}
+  {{template "stats-panel" .Stats}}
+
+  {{/* ═══ DIVIDER ═══ */}}
+  <div class="divider divider-neutral my-0 opacity-30"></div>
+
+  {{/* ═══ ROW 2: Charts Sidebar + Report Table (Z3 ↘ Z4) ═══ */}}
+  <div class="grid grid-cols-1 lg:grid-cols-6 gap-4">
+
+    {{/* Z3: Chart sidebar — 2 of 6 columns */}}
+    {{template "chart-sidebar" .}}
+
+    {{/* Z4: Filters + Table — 4 of 6 columns */}}
+    <div class="lg:col-span-4 flex flex-col gap-4">
+
+      {{/* Filter bar */}}
+      <div class="card bg-base-100 shadow-sm">
+        <div class="card-body py-3 px-4">
+          <form hx-get="/partials/reports" hx-target="#report-list"
+                class="flex flex-wrap gap-3 items-end">
+            <input type="text" name="search" placeholder="Search workload, namespace, alert..."
+                   class="input input-bordered input-sm w-64"
+                   value="{{.Query}}"
+                   hx-get="/partials/reports" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#report-list"
+                   hx-include="[name='severity'],[name='status']">
+            <select name="severity" class="select select-bordered select-sm"
+                    hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
+                    hx-include="[name='search'],[name='status']">
+              <option value="">All Severities</option>
+              <option value="critical" {{if eq .Severity "critical"}}selected{{end}}>🔴 Critical</option>
+              <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>🟡 Warning</option>
+              <option value="info" {{if eq .Severity "info"}}selected{{end}}>🔵 Info</option>
+            </select>
+            <select name="status" class="select select-bordered select-sm"
+                    hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
+                    hx-include="[name='search'],[name='severity']">
+              <option value="">All Status</option>
+              <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
+              <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
+            </select>
+            <span class="text-sm text-base-content/60 font-mono" id="report-count">
+              {{.TotalCount}} report{{if ne .TotalCount 1}}s{{end}}
+            </span>
+          </form>
+        </div>
+      </div>
+
+      {{/* Report table */}}
+      <div id="report-list">
+        {{template "report-table" .}}
+      </div>
+    </div>
   </div>
 </div>
 {{end}}

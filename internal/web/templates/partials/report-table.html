@@ -10,8 +10,6 @@
           <th>Namespace</th>
           <th>Alert</th>
           <th>Blast</th>
-          <th>Classification</th>
-          <th>Summary</th>
           <th>Age</th>
           <th>Status</th>
         </tr>
@@ -23,10 +21,11 @@
           <td><span class="badge {{severityClass .Severity}} badge-sm">{{.Severity}}</span></td>
           <td class="font-mono text-sm">{{.Workload}}</td>
           <td>{{.Namespace}}</td>
-          <td class="text-sm">{{.AlertName}}</td>
-          <td>{{blastIcon .BlastRadius}} {{.BlastRadius}}</td>
-          <td><span class="badge badge-outline badge-sm">{{.Classification}}</span></td>
-          <td class="max-w-xs truncate text-sm">{{.Summary}}</td>
+          <td class="max-w-xs">
+            <div class="text-sm font-medium">{{.AlertName}}</div>
+            {{if .Summary}}<div class="text-xs text-base-content/60 truncate max-w-xs">{{.Summary}}</div>{{end}}
+          </td>
+          <td class="whitespace-nowrap">{{blastDots .BlastRadius}} <span class="text-xs">{{.BlastRadius}}</span></td>
           <td class="text-sm whitespace-nowrap">{{timeAgo .CompletedAt}}</td>
           <td>
             {{if .ResolvedAt}}
@@ -38,7 +37,7 @@
         </tr>
         {{else}}
         <tr>
-          <td colspan="9" class="text-center py-12 text-base-content/50">
+          <td colspan="7" class="text-center py-12 text-base-content/50">
             <div class="flex flex-col items-center gap-2">
               <span class="text-4xl">✅</span>
               <span>No triage reports found</span>
