@@ -1,0 +1,183 @@
+{{define "report-detail"}}
+<div class="flex flex-col gap-4">
+  {{/* Breadcrumbs */}}
+  <div class="breadcrumbs text-sm">
+    <ul>
+      <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
+      <li>Report #{{.Report.ID}}</li>
+    </ul>
+  </div>
+
+  {{/* Header */}}
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <div class="flex justify-between items-start flex-wrap gap-2">
+        <div>
+          <h2 class="card-title text-lg font-mono">
+            {{.Report.Kind}}/{{.Report.Workload}}
+            <span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>
+          </h2>
+          <p class="text-sm text-base-content/60 mt-1">
+            Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
+            · Alert: {{.Report.AlertName}}
+            · {{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}} blast radius
+          </p>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="radial-progress text-primary text-xs"
+               style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:3px;"
+               role="progressbar" aria-valuemin="0" aria-valuemax="100"
+               aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
+               aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
+            {{printf "%.0f" .Report.Confidence}}%
+          </div>
+          {{if .Report.ResolvedAt}}
+            <span class="badge badge-success">Resolved {{timeAgo (deref .Report.ResolvedAt)}}</span>
+          {{else}}
+            <span class="badge badge-error">Active</span>
+          {{end}}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {{/* Two-column layout: Understand (left) + Act (right) */}}
+  <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+
+    {{/* Left column: Understanding — 3 of 5 columns */}}
+    <div class="lg:col-span-3 flex flex-col gap-4">
+      {{/* Summary */}}
+      {{if .Report.Summary}}
+      <div class="card bg-base-100 shadow">
+        <div class="card-body">
+          <h3 class="font-semibold">Summary</h3>
+          <p class="break-words">{{.Report.Summary}}</p>
+        </div>
+      </div>
+      {{end}}
+
+      {{/* Root Cause */}}
+      <div class="card bg-base-100 shadow">
+        <div class="card-body">
+          <h3 class="font-semibold">Root Cause</h3>
+          <p>{{.Report.RootCause}}</p>
+        </div>
+      </div>
+
+      {{/* Causal Chain */}}
+      {{if gt (len .Report.CausalChain) 0}}
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
+        <summary class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</summary>
+        <div class="collapse-content">
+          <ul class="steps steps-vertical">
+            {{range .Report.CausalChain}}
+            <li class="step step-primary">{{.}}</li>
+            {{end}}
+          </ul>
+        </div>
+      </details>
+      {{end}}
+
+      {{/* Evidence */}}
+      {{if gt (len .Report.Evidence) 0}}
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
+        <summary class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</summary>
+        <div class="collapse-content">
+          <div class="overflow-x-auto">
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th>Observation</th>
+                  <th>Source</th>
+                  <th>Strength</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .Report.Evidence}}
+                <tr>
+                  <td>{{.Observation}}</td>
+                  <td class="font-mono text-xs">{{.Source}}</td>
+                  <td><span class="badge badge-sm {{strengthClass .Strength}}">{{.Strength}}</span></td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+      {{end}}
+    </div>
+
+    {{/* Right column: Actions — 2 of 5 columns */}}
+    <div class="lg:col-span-2 flex flex-col gap-4">
+      {{/* L1 Diagnostic Commands */}}
+      {{if .L1Commands}}
+      <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="{ copied: false }">
+        <div class="card-body">
+          <div class="flex justify-between items-center">
+            <h3 class="font-semibold">L1 Diagnostic Commands</h3>
+            <button class="btn btn-sm btn-primary"
+                    @click="
+                      const cmds = [...document.querySelectorAll('[data-l1-cmd]')]
+                        .map(el => el.textContent.trim()).join('\n');
+                      navigator.clipboard.writeText(cmds);
+                      copied = true;
+                      setTimeout(() => copied = false, 2000);
+                    ">
+              <span x-show="!copied">📋 Copy All</span>
+              <span x-show="copied" x-cloak>✅ Copied!</span>
+            </button>
+          </div>
+          <div class="flex flex-col gap-2 mt-2">
+            {{range .L1Commands}}
+            <div class="bg-base-200 rounded-lg p-3" x-data="{ cmdCopied: false }">
+              <div class="flex justify-between items-start gap-2">
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm mb-1">{{.Action}}</p>
+                  <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-l1-cmd>{{.Command}}</code>
+                  {{if .Expected}}
+                  <p class="text-xs text-base-content/60 mt-1">→ Expected: {{.Expected}}</p>
+                  {{end}}
+                </div>
+                <button class="btn btn-xs btn-ghost"
+                        @click="navigator.clipboard.writeText($el.closest('[x-data]').querySelector('[data-l1-cmd]').textContent.trim()); cmdCopied = true; setTimeout(() => cmdCopied = false, 1500)">
+                  <span x-show="!cmdCopied">📋</span>
+                  <span x-show="cmdCopied" x-cloak>✅</span>
+                </button>
+              </div>
+            </div>
+            {{end}}
+          </div>
+        </div>
+      </div>
+      {{end}}
+
+      {{/* Agent Recommendations */}}
+      {{if .AgentRecs}}
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
+        <summary class="collapse-title font-semibold">
+          Agent Recommendations ({{len .AgentRecs}})
+        </summary>
+        <div class="collapse-content">
+          <div class="flex flex-col gap-2">
+            {{range .AgentRecs}}
+            <div class="alert">
+              <div class="flex flex-col gap-1 w-full min-w-0">
+                <div class="flex justify-between items-center">
+                  <span class="font-semibold text-sm">{{.Action}}</span>
+                  <span class="badge badge-sm {{riskClass .Risk}}">Risk: {{.Risk}}</span>
+                </div>
+                {{if .Command}}
+                <code class="font-mono text-xs bg-base-200 p-2 rounded-lg block overflow-x-auto border border-base-content/10 mt-1 whitespace-pre">{{.Command}}</code>
+                {{end}}
+              </div>
+            </div>
+            {{end}}
+          </div>
+        </div>
+      </details>
+      {{end}}
+    </div>
+  </div>
+</div>
+{{end}}

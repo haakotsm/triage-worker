@@ -34,6 +34,13 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	var reportAct *activity.ReportActivity
 	var k8sAct *activity.K8sActivity
 
+	// Short-lived activity options for state updates (non-critical, best-effort).
+	stateOpts := workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	}
+	stateCtx := workflow.WithActivityOptions(ctx, stateOpts)
+
 	// --- Step 1: Correlate alerts ---
 	alerts, err := correlateAlerts(ctx)
 	if err != nil {
@@ -48,6 +55,10 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	)
 
 	// --- Step 2: Parallel enrichment ---
+	// Emit "enriching" state for realtime dashboard.
+	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+		workflow.GetInfo(ctx).WorkflowExecution.ID, "enriching", "").Get(ctx, nil)
+
 	enrichOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
@@ -87,6 +98,10 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	}
 
 	// --- Step 3: Invoke triage agent ---
+	// Emit "triaging" state for realtime dashboard.
+	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+		workflow.GetInfo(ctx).WorkflowExecution.ID, "triaging", "").Get(ctx, nil)
+
 	agentOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 300 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{

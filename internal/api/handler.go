@@ -31,7 +31,7 @@ type Report struct {
 	EscalationNeeded bool             `json:"escalation_needed"`
 	AlertCount       int              `json:"alert_count"`
 	StartedAt        time.Time        `json:"started_at"`
-	CompletedAt      time.Time        `json:"completed_at"`
+	CompletedAt      *time.Time       `json:"completed_at,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
 	ResolvedAt       *time.Time       `json:"resolved_at,omitempty"`
 }
@@ -207,14 +207,14 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 	for rows.Next() {
 		var r Report
 		var causalChainJSON, evidenceJSON, recommendationsJSON []byte
-		var resolvedAt sql.NullTime
+		var resolvedAt, completedAt sql.NullTime
 
 		err := rows.Scan(
 			&r.ID, &r.WorkflowID, &r.Namespace, &r.Workload, &r.Kind, &r.AlertName,
 			&r.Classification, &r.Severity, &r.RootCause,
 			&causalChainJSON, &evidenceJSON, &recommendationsJSON,
 			&r.Confidence, &r.EscalationNeeded, &r.AlertCount,
-			&r.StartedAt, &r.CompletedAt, &r.CreatedAt, &resolvedAt,
+			&r.StartedAt, &completedAt, &r.CreatedAt, &resolvedAt,
 			&r.Summary, &r.BlastRadius,
 		)
 		if err != nil {
@@ -223,6 +223,9 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 
 		if resolvedAt.Valid {
 			r.ResolvedAt = &resolvedAt.Time
+		}
+		if completedAt.Valid {
+			r.CompletedAt = &completedAt.Time
 		}
 
 		// Unmarshal JSONB columns

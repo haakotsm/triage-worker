@@ -1,0 +1,109 @@
+{{define "stats-panel"}}
+<div>
+  <div class="grid grid-cols-1 lg:grid-cols-6 gap-4">
+
+    {{/* Z1: KPI stat cards — 4 of 6 columns */}}
+    <div class="lg:col-span-4">
+      <div class="stats stats-vertical sm:stats-horizontal shadow-lg bg-base-100 w-full border-l-4 border-primary">
+
+        <div class="stat{{if gt .ActiveCount 0}} border-l-2 border-error{{end}}">
+          <div class="stat-figure text-error">
+            {{if gt .ActiveCount 0}}
+            <div class="indicator">
+              <span class="indicator-item indicator-start badge badge-error badge-xs animate-pulse"></span>
+              <span class="text-3xl">🔥</span>
+            </div>
+            {{else}}
+            <span class="text-3xl">✅</span>
+            {{end}}
+          </div>
+          <div class="stat-title">Active</div>
+          <div class="stat-value text-error">{{.ActiveCount}}</div>
+          <div class="stat-desc">of {{.TotalCount}} total</div>
+        </div>
+
+        <div class="stat">
+          <div class="stat-figure text-warning">
+            <div class="radial-progress text-warning text-xs"
+                 style="--value:{{if gt .TotalCount 0}}{{pct .CriticalCount .TotalCount}}{{else}}0{{end}};--size:3rem;--thickness:3px;"
+                 role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                 aria-valuenow="{{if gt .TotalCount 0}}{{pct .CriticalCount .TotalCount}}{{else}}0{{end}}"
+                 aria-label="Critical: {{.CriticalCount}} of {{.TotalCount}} incidents">
+              {{.CriticalCount}}
+            </div>
+          </div>
+          <div class="stat-title">Critical</div>
+          <div class="stat-value text-warning">{{.CriticalCount}}</div>
+          <div class="stat-desc">{{.WarningCount}} warn · {{.InfoCount}} info</div>
+        </div>
+
+        <div class="stat">
+          <div class="stat-figure text-primary">
+            <span class="text-3xl">⏱</span>
+          </div>
+          <div class="stat-title">Avg MTTR</div>
+          <div class="stat-value text-primary text-2xl">{{.MTTRDisplay}}</div>
+          <div class="stat-desc">Mean time to resolve</div>
+        </div>
+
+        <div class="stat">
+          <div class="stat-figure text-success">
+            <div class="radial-progress text-success text-xs"
+                 style="--value:{{fmtPct .ResolutionRate}};--size:3rem;--thickness:3px;"
+                 role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                 aria-valuenow="{{fmtPct .ResolutionRate}}"
+                 aria-label="Resolution rate: {{fmtPct .ResolutionRate}} percent">
+              {{fmtPct .ResolutionRate}}%
+            </div>
+          </div>
+          <div class="stat-title">Resolved</div>
+          <div class="stat-value text-success">{{fmtPct .ResolutionRate}}%</div>
+          <div class="stat-desc">{{.ResolvedCount}} of {{.TotalCount}}</div>
+        </div>
+
+      </div>
+    </div>
+
+    {{/* Z2: Severity radial gauges — 2 of 6 columns */}}
+    <div class="lg:col-span-2">
+      <div class="card bg-base-100 shadow-lg h-full">
+        <div class="card-body p-4 justify-center">
+          <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wider">Severity</h3>
+          <div class="flex justify-around items-center pt-2">
+            <div class="flex flex-col items-center gap-1">
+              <div class="radial-progress text-error"
+                   style="--value:{{if gt .ActiveCount 0}}{{pct .CriticalCount .ActiveCount}}{{else}}0{{end}};--size:3.5rem;--thickness:4px;"
+                   role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                   aria-valuenow="{{if gt .ActiveCount 0}}{{pct .CriticalCount .ActiveCount}}{{else}}0{{end}}"
+                   aria-label="Critical severity: {{.CriticalCount}} incidents">
+                <span class="text-xs font-bold">{{.CriticalCount}}</span>
+              </div>
+              <span class="text-xs text-base-content/60">Critical</span>
+            </div>
+            <div class="flex flex-col items-center gap-1">
+              <div class="radial-progress text-warning"
+                   style="--value:{{if gt .ActiveCount 0}}{{pct .WarningCount .ActiveCount}}{{else}}0{{end}};--size:3.5rem;--thickness:4px;"
+                   role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                   aria-valuenow="{{if gt .ActiveCount 0}}{{pct .WarningCount .ActiveCount}}{{else}}0{{end}}"
+                   aria-label="Warning severity: {{.WarningCount}} incidents">
+                <span class="text-xs font-bold">{{.WarningCount}}</span>
+              </div>
+              <span class="text-xs text-base-content/60">Warning</span>
+            </div>
+            <div class="flex flex-col items-center gap-1">
+              <div class="radial-progress text-info"
+                   style="--value:{{if gt .ActiveCount 0}}{{pct .InfoCount .ActiveCount}}{{else}}0{{end}};--size:3.5rem;--thickness:4px;"
+                   role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                   aria-valuenow="{{if gt .ActiveCount 0}}{{pct .InfoCount .ActiveCount}}{{else}}0{{end}}"
+                   aria-label="Info severity: {{.InfoCount}} incidents">
+                <span class="text-xs font-bold">{{.InfoCount}}</span>
+              </div>
+              <span class="text-xs text-base-content/60">Info</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

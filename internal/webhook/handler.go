@@ -30,6 +30,7 @@ type Handler struct {
 	healthy        *atomic.Bool
 	webhookSecret  string
 	apiHandler     http.Handler
+	webHandler     http.Handler
 	db             *sql.DB
 }
 
@@ -37,7 +38,7 @@ type Handler struct {
 // If webhookSecret is non-empty, Bearer token authentication is required on /webhook.
 // If apiHandler is non-nil, requests to /api/ are delegated to it.
 // If db is non-nil, resolved alerts will update resolved_at on matching reports.
-func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string, apiHandler http.Handler, db *sql.DB) *Handler {
+func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string, apiHandler http.Handler, webHandler http.Handler, db *sql.DB) *Handler {
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
 	if webhookSecret == "" {
@@ -50,6 +51,7 @@ func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhook
 		healthy:        healthy,
 		webhookSecret:  webhookSecret,
 		apiHandler:     apiHandler,
+		webHandler:     webHandler,
 		db:             db,
 	}
 }
@@ -71,7 +73,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/api/") && h.apiHandler != nil:
 		h.apiHandler.ServeHTTP(w, r)
 	default:
-		http.NotFound(w, r)
+		if h.webHandler != nil {
+			h.webHandler.ServeHTTP(w, r)
+		} else {
+			http.NotFound(w, r)
+		}
 	}
 }
 
@@ -155,6 +161,17 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	for wfID, alerts := range alertsByWorkflow {
 		identity := identitiesByWorkflow[wfID]
+
+		// Create preliminary report row for realtime lifecycle tracking (best-effort).
+		if h.db != nil {
+			_, _ = h.db.ExecContext(ctx,
+				`INSERT INTO triage.reports (workflow_id, namespace, workload, kind, alert_name, state)
+				 VALUES ($1, $2, $3, $4, $5, 'correlating')
+				 ON CONFLICT (workflow_id) DO NOTHING`,
+				wfID, identity.Namespace, identity.Name, identity.Kind, identity.AlertName,
+			)
+		}
+
 		if err := h.signalWithStart(ctx, wfID, identity, alerts); err != nil {
 			h.logger.Error("signal-with-start failed",
 				"workflow_id", wfID,
@@ -241,7 +258,8 @@ func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGro
 	updated := 0
 	for wfID := range seen {
 		result, err := h.db.ExecContext(ctx,
-			`UPDATE triage.reports SET resolved_at = NOW() WHERE workflow_id = $1 AND resolved_at IS NULL`,
+			`UPDATE triage.reports SET resolved_at = NOW(), state = 'resolved'
+			 WHERE workflow_id = $1 AND resolved_at IS NULL`,
 			wfID,
 		)
 		if err != nil {

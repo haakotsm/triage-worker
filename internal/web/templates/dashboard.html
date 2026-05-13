@@ -1,0 +1,90 @@
+{{define "dashboard"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "content"}}
+<div class="flex flex-col gap-6"
+     {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}>
+
+  {{/* SSE connection indicator */}}
+  {{if .SSEEnabled}}
+  <div x-data="{ connected: false, init() {
+    this.$el.closest('[sse-connect]').addEventListener('htmx:sseOpen', () => this.connected = true);
+    this.$el.closest('[sse-connect]').addEventListener('htmx:sseClose', () => this.connected = false);
+    this.$el.closest('[sse-connect]').addEventListener('htmx:sseError', () => this.connected = false);
+  }}" class="fixed bottom-4 right-4 z-50">
+    <div class="badge badge-sm gap-1" :class="connected ? 'badge-success' : 'badge-error'">
+      <span class="inline-block w-2 h-2 rounded-full" :class="connected ? 'bg-success animate-pulse' : 'bg-error'"></span>
+      <span x-text="connected ? 'Live' : 'Reconnecting...'" class="text-xs"></span>
+    </div>
+  </div>
+  {{end}}
+
+  {{/* ═══ ROW 1: KPI Stats + Severity Gauges (Z1 → Z2) ═══ */}}
+  <div id="stats-panel"
+       hx-get="/partials/stats" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:incident-update, sse:stats-update, sse:refresh, {{end}}every 30s" hx-swap="innerHTML">
+    {{template "stats-panel" .Stats}}
+  </div>
+
+  {{/* ═══ ACTIVE INCIDENTS ═══ */}}
+  <div id="incidents-panel"
+       hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:refresh, {{end}}every 10s" hx-swap="innerHTML">
+    {{template "incidents-table" .}}
+  </div>
+
+  {{/* ═══ DIVIDER ═══ */}}
+  <div class="divider divider-neutral my-0 opacity-30"></div>
+
+  {{/* ═══ ROW 2: Charts Sidebar + Report Table (Z3 ↘ Z4) ═══ */}}
+  <div class="grid grid-cols-1 lg:grid-cols-6 gap-4">
+
+    {{/* Z3: Chart sidebar — 2 of 6 columns (pushed below table on mobile) */}}
+    <div class="lg:col-span-2 order-2 lg:order-1">
+      {{template "chart-sidebar" .}}
+    </div>
+
+    {{/* Z4: Filters + Table — 4 of 6 columns (shown first on mobile) */}}
+    <div class="lg:col-span-4 flex flex-col gap-4 order-1 lg:order-2">
+
+      {{/* Filter bar */}}
+      <div class="card bg-base-100 shadow-sm">
+        <div class="card-body py-3 px-4">
+          <form @submit.prevent class="flex flex-wrap gap-3 items-end">
+            <input type="text" name="search" placeholder="Search workload, namespace, alert..."
+                   class="input input-bordered input-sm w-64"
+                   value="{{.Query}}"
+                   hx-get="/partials/reports" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#report-list"
+                   hx-include="[name='severity'],[name='status']">
+            <select name="severity" class="select select-bordered select-sm"
+                    hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
+                    hx-include="[name='search'],[name='status']">
+              <option value="">All Severities</option>
+              <option value="critical" {{if eq .Severity "critical"}}selected{{end}}>🔴 Critical</option>
+              <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>🟡 Warning</option>
+              <option value="info" {{if eq .Severity "info"}}selected{{end}}>🔵 Info</option>
+            </select>
+            <select name="status" class="select select-bordered select-sm"
+                    hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
+                    hx-include="[name='search'],[name='severity']">
+              <option value="">All Status</option>
+              <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
+              <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
+            </select>
+            <span class="text-sm text-base-content/60 font-mono" id="report-count">
+              {{.TotalCount}} report{{if ne .TotalCount 1}}s{{end}}
+            </span>
+          </form>
+        </div>
+      </div>
+
+      {{/* Report table — refreshes on SSE report events, preserving current page offset */}}
+      <div id="report-list-wrap"
+           hx-get="/partials/reports" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:refresh, {{end}}every 30s" hx-target="#report-list" hx-swap="outerHTML"
+           hx-include="[name='search'],[name='severity'],[name='status'],[name='offset'],[name='limit']">
+        {{template "report-table" .}}
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
