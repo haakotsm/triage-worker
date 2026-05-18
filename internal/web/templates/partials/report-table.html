@@ -70,7 +70,15 @@
             {{if .ResolvedAt}}
               <span class="badge badge-success badge-sm">Resolved</span>
             {{else}}
-              <span class="badge badge-error badge-sm">Active</span>
+              <span class="inline-flex items-center gap-1">
+                <span class="badge badge-error badge-sm">Active</span>
+                <button class="btn btn-xs btn-success btn-outline"
+                        hx-post="/reports/{{.ID}}/resolve"
+                        hx-target="closest td"
+                        hx-swap="innerHTML"
+                        hx-confirm="Resolve this report?"
+                        onclick="event.stopPropagation()">✓</button>
+              </span>
             {{end}}
           </td>
         </tr>

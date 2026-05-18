@@ -195,6 +195,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePartialStats(w, r)
 	case r.URL.Path == "/partials/incidents":
 		h.handlePartialIncidents(w, r)
+	case strings.HasPrefix(r.URL.Path, "/reports/") && strings.HasSuffix(r.URL.Path, "/resolve"):
+		h.handleResolve(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
 		h.handleDetail(w, r)
 	default:
@@ -835,4 +837,65 @@ func (h *Handler) handlePartialIncidents(w http.ResponseWriter, r *http.Request)
 	h.render(w, "incidents-table", map[string]interface{}{
 		"Incidents": incidents,
 	})
+}
+
+// handleResolve processes POST /reports/:id/resolve to mark a report as resolved.
+func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract report ID: /reports/<id>/resolve
+	path := strings.TrimPrefix(r.URL.Path, "/reports/")
+	idStr := strings.TrimSuffix(path, "/resolve")
+	if idStr == "" {
+		http.Error(w, "Missing report ID", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid report ID", http.StatusBadRequest)
+		return
+	}
+
+	// Resolve: only transition if not already resolved (race guard).
+	result, err := h.db.ExecContext(r.Context(),
+		`UPDATE triage.reports
+		 SET state = 'resolved', resolved_at = NOW()
+		 WHERE id = $1 AND state != 'resolved'`, id)
+	if err != nil {
+		h.logger.Error("resolve report", "error", err, "id", id)
+		http.Error(w, "Failed to resolve", http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		// Either doesn't exist or already resolved.
+		h.logger.Info("resolve: no-op (already resolved or not found)", "id", id)
+	} else {
+		user := UserFromContext(r.Context())
+		email := ""
+		if user != nil {
+			email = user.Email
+		}
+		h.logger.Info("report resolved", "id", id, "by", email)
+
+		// Trigger PG NOTIFY so SSE clients refresh.
+		_, _ = h.db.ExecContext(r.Context(),
+			`SELECT pg_notify('report_changes', json_build_object('id', $1, 'state', 'resolved')::text)`, id)
+	}
+
+	// If htmx request, return updated badge + success toast.
+	if isHTMX(r) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("HX-Trigger", "report-resolved")
+		fmt.Fprintf(w, `<span class="badge badge-success badge-sm">Resolved</span>`)
+		return
+	}
+
+	// Non-htmx: redirect back to report detail.
+	http.Redirect(w, r, "/reports/"+idStr, http.StatusSeeOther)
 }
