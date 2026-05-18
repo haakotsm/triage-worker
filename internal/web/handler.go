@@ -166,7 +166,7 @@ func NewHandler(db *sql.DB, logger *slog.Logger) (*Handler, error) {
 	return &Handler{
 		pages:    pages,
 		partials: shared,
-		static:   http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))),
+		static:   cacheHeaders(http.StripPrefix("/static/", http.FileServer(http.FS(staticFS)))),
 		db:       db,
 		logger:   logger,
 	}, nil
@@ -224,7 +224,7 @@ func (h *Handler) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePartialReports(w http.ResponseWriter, r *http.Request) {
-	data, err := h.fetchDashboardData(r)
+	data, err := h.fetchReportTableData(r)
 	if err != nil {
 		h.logger.Error("fetch partial data", "error", err)
 		h.renderError(w, "Failed to load reports")
@@ -417,6 +417,100 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		Reports:    reports,
 		Stats:      stats,
 		Incidents:  incidents,
+		TotalCount: totalCount,
+		Limit:      limit,
+		Offset:     offset,
+		Query:      search,
+		Severity:   severity,
+		Status:     status,
+		Sort:       sort,
+		Dir:        dir,
+		SSEEnabled: h.sse != nil,
+	}, nil
+}
+
+// fetchReportTableData is a lightweight version of fetchDashboardData that only
+// queries the reports table (no stats, no incidents). Used for partial refreshes.
+func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
+	q := r.URL.Query()
+	limit := intParam(q.Get("limit"), 20, 1, 100)
+	offset := intParam(q.Get("offset"), 0, 0, 10000)
+	severity := q.Get("severity")
+	search := q.Get("search")
+	status := q.Get("status")
+	sort := q.Get("sort")
+	dir := q.Get("dir")
+
+	// Validate sort field.
+	validSorts := map[string]string{
+		"severity":  "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END",
+		"workload":  "workload",
+		"namespace": "namespace",
+		"alert":     "alert_name",
+		"blast":     "CASE blast_radius WHEN 'cluster' THEN 0 WHEN 'namespace' THEN 1 WHEN 'deployment' THEN 2 ELSE 3 END",
+		"age":       "COALESCE(completed_at, created_at)",
+		"status":    "CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END",
+	}
+	if _, ok := validSorts[sort]; !ok {
+		sort = ""
+	}
+	if dir != "asc" && dir != "desc" {
+		dir = "desc"
+	}
+
+	where := "WHERE 1=1"
+	args := []interface{}{}
+	argIdx := 1
+
+	if severity != "" {
+		where += " AND severity = $" + strconv.Itoa(argIdx)
+		args = append(args, severity)
+		argIdx++
+	}
+	if search != "" {
+		where += fmt.Sprintf(" AND (workload ILIKE $%d OR namespace ILIKE $%d OR alert_name ILIKE $%d)", argIdx, argIdx, argIdx)
+		args = append(args, "%"+search+"%")
+		argIdx++
+	}
+	switch status {
+	case "active":
+		where += " AND resolved_at IS NULL"
+	case "resolved":
+		where += " AND resolved_at IS NOT NULL"
+	}
+
+	var totalCount int
+	countQuery := "SELECT COUNT(*) FROM triage.reports " + where + " AND state IN ('reported', 'resolved')"
+	if err := h.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount); err != nil {
+		return DashboardData{}, fmt.Errorf("count: %w", err)
+	}
+
+	orderBy := `ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END,
+			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+			created_at DESC`
+	if sort != "" {
+		orderBy = fmt.Sprintf("ORDER BY %s %s", validSorts[sort], dir)
+	}
+
+	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
+		classification, severity, root_cause, causal_chain, evidence,
+		recommendations, confidence, escalation_needed, alert_count,
+		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
+		FROM triage.reports %s AND state IN ('reported', 'resolved')
+		%s
+		LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
+	dataArgs := make([]interface{}, len(args)+2)
+	copy(dataArgs, args)
+	dataArgs[len(args)] = limit
+	dataArgs[len(args)+1] = offset
+
+	reports, err := h.queryReports(r.Context(), dataQuery, dataArgs...)
+	if err != nil {
+		return DashboardData{}, fmt.Errorf("query: %w", err)
+	}
+
+	return DashboardData{
+		Reports:    reports,
 		TotalCount: totalCount,
 		Limit:      limit,
 		Offset:     offset,
@@ -898,4 +992,12 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 
 	// Non-htmx: redirect back to report detail.
 	http.Redirect(w, r, "/reports/"+idStr, http.StatusSeeOther)
+}
+
+// cacheHeaders wraps an http.Handler to add immutable cache headers for static assets.
+func cacheHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		h.ServeHTTP(w, r)
+	})
 }

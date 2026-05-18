@@ -14,6 +14,10 @@
   <script src="/static/sse.js" defer></script>
   <script src="/static/morph.js" defer></script>
   <script src="/static/alpine.min.js" defer></script>
+  <style>
+    .htmx-indicator { opacity: 0; transition: opacity 200ms ease-in; }
+    .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+  </style>
 </head>
 <body class="min-h-screen bg-base-200" hx-headers='js:{"X-CSRF-Token": document.cookie.match(/_csrf=([^;]+)/)?.[1] || ""}'>
   <div class="navbar bg-base-100 shadow-lg">
@@ -36,5 +40,22 @@
   <main class="container mx-auto px-4 py-6" id="main-content">
     {{template "content" .}}
   </main>
+  <div id="toast-container" class="toast toast-top toast-end z-50"></div>
+  <script>
+    document.addEventListener('htmx:responseError', function(evt) {
+      var msg = 'Request failed (status ' + evt.detail.xhr.status + ')';
+      showToast(msg, 'alert-error');
+    });
+    document.addEventListener('htmx:sendError', function() {
+      showToast('Network error — check your connection', 'alert-warning');
+    });
+    function showToast(msg, cls) {
+      var el = document.createElement('div');
+      el.className = 'alert ' + cls + ' shadow-lg text-sm';
+      el.innerHTML = '<span>' + msg + '</span>';
+      document.getElementById('toast-container').appendChild(el);
+      setTimeout(function() { el.remove(); }, 5000);
+    }
+  </script>
 </body>
 </html>{{end}}

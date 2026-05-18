@@ -55,6 +55,7 @@
       <tbody>
         {{range .Reports}}
         <tr class="hover cursor-pointer" tabindex="0"
+            aria-label="View report: {{.AlertName}} on {{.Workload}}"
             hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true"
             hx-trigger="click, keyup[key=='Enter']">
           <td><span class="badge {{severityClass .Severity}} badge-sm">{{.Severity}}</span></td>
