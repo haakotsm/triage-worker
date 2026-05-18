@@ -103,6 +103,8 @@ type DashboardData struct {
 	Query      string
 	Severity   string
 	Status     string
+	Sort       string
+	Dir        string
 	SSEEnabled bool
 }
 
@@ -322,6 +324,25 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 	severity := q.Get("severity")
 	search := q.Get("search")
 	status := q.Get("status")
+	sort := q.Get("sort")
+	dir := q.Get("dir")
+
+	// Validate sort field (whitelist to prevent SQL injection).
+	validSorts := map[string]string{
+		"severity":  "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END",
+		"workload":  "workload",
+		"namespace": "namespace",
+		"alert":     "alert_name",
+		"blast":     "CASE blast_radius WHEN 'cluster' THEN 0 WHEN 'namespace' THEN 1 WHEN 'deployment' THEN 2 ELSE 3 END",
+		"age":       "COALESCE(completed_at, created_at)",
+		"status":    "CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END",
+	}
+	if _, ok := validSorts[sort]; !ok {
+		sort = "" // fall back to default sort
+	}
+	if dir != "asc" && dir != "desc" {
+		dir = "desc"
+	}
 
 	where := "WHERE 1=1"
 	args := []interface{}{}
@@ -351,16 +372,22 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		return DashboardData{}, fmt.Errorf("count: %w", err)
 	}
 
+	// Build ORDER BY — user sort takes precedence, default by active-first → severity → newest.
+	orderBy := `ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END,
+			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+			created_at DESC`
+	if sort != "" {
+		orderBy = fmt.Sprintf("ORDER BY %s %s", validSorts[sort], dir)
+	}
+
 	// Data query — only show completed/resolved reports (not in-flight).
 	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
 		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
 		FROM triage.reports %s AND state IN ('reported', 'resolved')
-		ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END,
-			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
-			created_at DESC
-		LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+		%s
+		LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
 	// Explicit copy to avoid mutating args' backing array.
 	dataArgs := make([]interface{}, len(args)+2)
 	copy(dataArgs, args)
@@ -394,6 +421,8 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		Query:      search,
 		Severity:   severity,
 		Status:     status,
+		Sort:       sort,
+		Dir:        dir,
 		SSEEnabled: h.sse != nil,
 	}, nil
 }
@@ -754,6 +783,21 @@ func templateFuncs() template.FuncMap {
 			default:
 				return "badge-ghost"
 			}
+		},
+		"sortIndicator": func(col, activeSort, activeDir string) template.HTML {
+			if col != activeSort {
+				return template.HTML(`<span class="opacity-30">⇅</span>`)
+			}
+			if activeDir == "asc" {
+				return template.HTML(`<span class="text-primary">▲</span>`)
+			}
+			return template.HTML(`<span class="text-primary">▼</span>`)
+		},
+		"toggleDir": func(col, activeSort, activeDir string) string {
+			if col == activeSort && activeDir == "desc" {
+				return "asc"
+			}
+			return "desc"
 		},
 		"formatDuration": func(t time.Time) string {
 			d := time.Since(t)

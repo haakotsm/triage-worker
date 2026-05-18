@@ -81,7 +81,7 @@
       {{/* Report table — refreshes on SSE report events, preserving current page offset */}}
       <div id="report-list-wrap"
            hx-get="/partials/reports" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:refresh, {{end}}every 30s" hx-target="#report-list" hx-swap="outerHTML"
-           hx-include="[name='search'],[name='severity'],[name='status'],[name='offset'],[name='limit']">
+           hx-include="[name='search'],[name='severity'],[name='status'],[name='offset'],[name='limit'],[name='sort'],[name='dir']">
         {{template "report-table" .}}
       </div>
     </div>

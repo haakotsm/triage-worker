@@ -17,6 +17,7 @@ const (
 	maxSSEClients       = 100
 	sseReconnectTimeout = 3 * time.Second
 	channelReports      = "report_changes"
+	debounceWindow      = 500 * time.Millisecond
 )
 
 // SSEBroker manages Server-Sent Events with PG LISTEN/NOTIFY fan-out.
@@ -29,6 +30,11 @@ type SSEBroker struct {
 	listener  *pq.Listener
 	cancelCtx context.CancelFunc
 	wg        sync.WaitGroup // tracks dispatchLoop goroutine
+
+	// Debounce: coalesce rapid PG NOTIFY events into a single broadcast.
+	debounceMu    sync.Mutex
+	pendingEvents map[string]SSEEvent // keyed by event name
+	debounceTimer *time.Timer
 }
 
 // SSEEvent represents a named event sent to clients.
@@ -51,10 +57,11 @@ type IncidentNotification struct {
 // NewSSEBroker creates a broker. Call Start() to begin listening.
 func NewSSEBroker(db *sql.DB, dsn string, logger *slog.Logger) *SSEBroker {
 	return &SSEBroker{
-		clients: make(map[chan SSEEvent]struct{}),
-		logger:  logger,
-		db:      db,
-		dsn:     dsn,
+		clients:       make(map[chan SSEEvent]struct{}),
+		logger:        logger,
+		db:            db,
+		dsn:           dsn,
+		pendingEvents: make(map[string]SSEEvent),
 	}
 }
 
@@ -105,11 +112,13 @@ func (b *SSEBroker) dispatchLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Flush any pending debounced events before exit.
+			b.flushPendingEvents()
 			return
 		case n := <-b.listener.Notify:
 			if n == nil {
 				// PG listener reconnected — notifications during disconnect are lost.
-				// Broadcast refresh so frontends know to refetch.
+				// Broadcast refresh immediately (not debounced) so frontends refetch.
 				b.broadcast(SSEEvent{Name: "refresh", Data: `{"reason":"reconnect"}`})
 				continue
 			}
@@ -127,8 +136,40 @@ func (b *SSEBroker) dispatchLoop(ctx context.Context) {
 					eventName = "incident-update"
 				}
 			}
-			b.broadcast(SSEEvent{Name: eventName, Data: n.Extra})
+			b.debouncedBroadcast(SSEEvent{Name: eventName, Data: n.Extra})
 		}
+	}
+}
+
+// debouncedBroadcast coalesces events within a debounce window.
+// Only the latest event per event-name is kept; after the window expires,
+// all pending events are broadcast at once.
+func (b *SSEBroker) debouncedBroadcast(event SSEEvent) {
+	b.debounceMu.Lock()
+	defer b.debounceMu.Unlock()
+
+	b.pendingEvents[event.Name] = event
+
+	if b.debounceTimer != nil {
+		b.debounceTimer.Stop()
+	}
+	b.debounceTimer = time.AfterFunc(debounceWindow, func() {
+		b.flushPendingEvents()
+	})
+}
+
+// flushPendingEvents broadcasts all coalesced events and clears the buffer.
+func (b *SSEBroker) flushPendingEvents() {
+	b.debounceMu.Lock()
+	events := make([]SSEEvent, 0, len(b.pendingEvents))
+	for _, ev := range b.pendingEvents {
+		events = append(events, ev)
+	}
+	b.pendingEvents = make(map[string]SSEEvent)
+	b.debounceMu.Unlock()
+
+	for _, ev := range events {
+		b.broadcast(ev)
 	}
 }
 
