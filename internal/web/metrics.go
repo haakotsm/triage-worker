@@ -1,0 +1,122 @@
+package web
+
+import (
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+	httpRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "triage",
+		Subsystem: "web",
+		Name:      "http_request_duration_seconds",
+		Help:      "Duration of HTTP requests in seconds.",
+		Buckets:   prometheus.DefBuckets,
+	}, []string{"method", "path", "status"})
+
+	httpRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "triage",
+		Subsystem: "web",
+		Name:      "http_requests_total",
+		Help:      "Total number of HTTP requests.",
+	}, []string{"method", "path", "status"})
+
+	sseActiveClients = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "triage",
+		Subsystem: "web",
+		Name:      "sse_active_clients",
+		Help:      "Number of active SSE client connections.",
+	})
+
+	reportsByState = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "triage",
+		Subsystem: "web",
+		Name:      "reports_by_state",
+		Help:      "Number of reports by state.",
+	}, []string{"state"})
+)
+
+// MetricsHandler returns the Prometheus metrics HTTP handler.
+func MetricsHandler() http.Handler {
+	return promhttp.Handler()
+}
+
+// InstrumentHandler wraps an http.Handler with Prometheus metrics.
+func InstrumentHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rw, r)
+
+		path := normalizePath(r.URL.Path)
+		status := strconv.Itoa(rw.statusCode)
+		duration := time.Since(start).Seconds()
+
+		httpRequestDuration.WithLabelValues(r.Method, path, status).Observe(duration)
+		httpRequestsTotal.WithLabelValues(r.Method, path, status).Inc()
+	})
+}
+
+// SetSSEClientCount updates the SSE active clients gauge.
+func SetSSEClientCount(count int) {
+	sseActiveClients.Set(float64(count))
+}
+
+// SetReportStateCount updates the report state gauge.
+func SetReportStateCount(state string, count int) {
+	reportsByState.WithLabelValues(state).Set(float64(count))
+}
+
+// responseWriter captures the status code for metrics.
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	written    bool
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	if !rw.written {
+		rw.statusCode = code
+		rw.written = true
+	}
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.written {
+		rw.written = true
+	}
+	return rw.ResponseWriter.Write(b)
+}
+
+// Unwrap supports http.ResponseController in Go 1.20+.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+// normalizePath reduces cardinality by collapsing dynamic segments.
+func normalizePath(path string) string {
+	switch {
+	case path == "/" || path == "/dashboard":
+		return "/"
+	case path == "/events":
+		return "/events"
+	case path == "/partials/reports":
+		return "/partials/reports"
+	case path == "/partials/stats":
+		return "/partials/stats"
+	case path == "/partials/incidents":
+		return "/partials/incidents"
+	case len(path) > 9 && path[:9] == "/reports/":
+		return "/reports/:id"
+	case len(path) > 8 && path[:8] == "/static/":
+		return "/static/*"
+	default:
+		return "/other"
+	}
+}

@@ -2,22 +2,60 @@
 <div id="report-list">
   <input type="hidden" name="offset" value="{{.Offset}}">
   <input type="hidden" name="limit" value="{{.Limit}}">
+  <input type="hidden" name="sort" value="{{.Sort}}">
+  <input type="hidden" name="dir" value="{{.Dir}}">
   <div class="overflow-x-auto">
     <table class="table table-zebra table-sm">
       <thead>
         <tr>
-          <th>Severity</th>
-          <th>Workload</th>
-          <th>Namespace</th>
-          <th>Alert</th>
-          <th>Blast</th>
-          <th>Age</th>
-          <th>Status</th>
+          <th class="cursor-pointer select-none"
+              hx-get="/partials/reports?sort=severity&dir={{toggleDir "severity" .Sort .Dir}}"
+              hx-target="#report-list" hx-swap="outerHTML"
+              hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
+            Severity {{sortIndicator "severity" .Sort .Dir}}
+          </th>
+          <th class="cursor-pointer select-none"
+              hx-get="/partials/reports?sort=workload&dir={{toggleDir "workload" .Sort .Dir}}"
+              hx-target="#report-list" hx-swap="outerHTML"
+              hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
+            Workload {{sortIndicator "workload" .Sort .Dir}}
+          </th>
+          <th class="cursor-pointer select-none"
+              hx-get="/partials/reports?sort=namespace&dir={{toggleDir "namespace" .Sort .Dir}}"
+              hx-target="#report-list" hx-swap="outerHTML"
+              hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
+            Namespace {{sortIndicator "namespace" .Sort .Dir}}
+          </th>
+          <th class="cursor-pointer select-none"
+              hx-get="/partials/reports?sort=alert&dir={{toggleDir "alert" .Sort .Dir}}"
+              hx-target="#report-list" hx-swap="outerHTML"
+              hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
+            Alert {{sortIndicator "alert" .Sort .Dir}}
+          </th>
+          <th class="cursor-pointer select-none"
+              hx-get="/partials/reports?sort=blast&dir={{toggleDir "blast" .Sort .Dir}}"
+              hx-target="#report-list" hx-swap="outerHTML"
+              hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
+            Blast {{sortIndicator "blast" .Sort .Dir}}
+          </th>
+          <th class="cursor-pointer select-none"
+              hx-get="/partials/reports?sort=age&dir={{toggleDir "age" .Sort .Dir}}"
+              hx-target="#report-list" hx-swap="outerHTML"
+              hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
+            Age {{sortIndicator "age" .Sort .Dir}}
+          </th>
+          <th class="cursor-pointer select-none"
+              hx-get="/partials/reports?sort=status&dir={{toggleDir "status" .Sort .Dir}}"
+              hx-target="#report-list" hx-swap="outerHTML"
+              hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
+            Status {{sortIndicator "status" .Sort .Dir}}
+          </th>
         </tr>
       </thead>
       <tbody>
         {{range .Reports}}
         <tr class="hover cursor-pointer" tabindex="0"
+            aria-label="View report: {{.AlertName}} on {{.Workload}}"
             hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true"
             hx-trigger="click, keyup[key=='Enter']">
           <td><span class="badge {{severityClass .Severity}} badge-sm">{{.Severity}}</span></td>
@@ -33,7 +71,15 @@
             {{if .ResolvedAt}}
               <span class="badge badge-success badge-sm">Resolved</span>
             {{else}}
-              <span class="badge badge-error badge-sm">Active</span>
+              <span class="inline-flex items-center gap-1">
+                <span class="badge badge-error badge-sm">Active</span>
+                <button class="btn btn-xs btn-success btn-outline"
+                        hx-post="/reports/{{.ID}}/resolve"
+                        hx-target="closest td"
+                        hx-swap="innerHTML"
+                        hx-confirm="Resolve this report?"
+                        onclick="event.stopPropagation()">✓</button>
+              </span>
             {{end}}
           </td>
         </tr>
@@ -57,7 +103,7 @@
     <div class="join">
       {{if gt .Offset 0}}
       <button class="join-item btn btn-sm" aria-label="Previous page"
-              hx-get="/partials/reports?offset={{sub .Offset .Limit}}&limit={{.Limit}}"
+              hx-get="/partials/reports?offset={{sub .Offset .Limit}}&limit={{.Limit}}&sort={{.Sort}}&dir={{.Dir}}"
               hx-target="#report-list"
               hx-swap="outerHTML"
               hx-include="[name='search'],[name='severity'],[name='status']">«</button>
@@ -67,7 +113,7 @@
       </button>
       {{if lt (add .Offset .Limit) .TotalCount}}
       <button class="join-item btn btn-sm" aria-label="Next page"
-              hx-get="/partials/reports?offset={{add .Offset .Limit}}&limit={{.Limit}}"
+              hx-get="/partials/reports?offset={{add .Offset .Limit}}&limit={{.Limit}}&sort={{.Sort}}&dir={{.Dir}}"
               hx-target="#report-list"
               hx-swap="outerHTML"
               hx-include="[name='search'],[name='severity'],[name='status']">»</button>
