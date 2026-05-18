@@ -15,7 +15,7 @@
   <script src="/static/morph.js" defer></script>
   <script src="/static/alpine.min.js" defer></script>
 </head>
-<body class="min-h-screen bg-base-200">
+<body class="min-h-screen bg-base-200" hx-headers='js:{"X-CSRF-Token": document.cookie.match(/_csrf=([^;]+)/)?.[1] || ""}'>
   <div class="navbar bg-base-100 shadow-lg">
     <div class="flex-1">
       <a href="/" class="btn btn-ghost text-xl">🔍 Triage Dashboard</a>
