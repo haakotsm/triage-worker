@@ -70,6 +70,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleHealthz(w, r)
 	case r.URL.Path == "/readyz":
 		h.handleReadyz(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && h.webHandler != nil:
+		h.webHandler.ServeHTTP(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/") && h.apiHandler != nil:
 		h.apiHandler.ServeHTTP(w, r)
 	default:

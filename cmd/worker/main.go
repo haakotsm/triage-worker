@@ -163,8 +163,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			logger.Info("SSE broker started")
 		}
 
-		webHandler = wh
-		logger.Info("web dashboard enabled")
+		devMode := os.Getenv("DEV_MODE") == "true"
+		authMW := web.NewAuthMiddleware(logger, devMode)
+		webHandler = authMW.Wrap(wh)
+		logger.Info("web dashboard enabled", "dev_mode", devMode)
 	}
 	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, webHandler, db)
 

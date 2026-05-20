@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // Report mirrors api.Report for template rendering.
@@ -195,6 +198,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePartialStats(w, r)
 	case r.URL.Path == "/partials/incidents":
 		h.handlePartialIncidents(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && strings.HasSuffix(r.URL.Path, "/acknowledge"):
+		h.handleAcknowledge(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && strings.HasSuffix(r.URL.Path, "/escalate"):
+		h.handleEscalate(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && strings.HasSuffix(r.URL.Path, "/notes"):
+		h.handleNotes(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/") && strings.HasSuffix(r.URL.Path, "/resolve"):
 		h.handleResolve(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
@@ -907,6 +916,200 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 
 	// Non-htmx: redirect back to report detail.
 	http.Redirect(w, r, "/reports/"+idStr, http.StatusSeeOther)
+}
+
+// extractIncidentID parses the incident ID from a path like /api/incidents/:id/action.
+func extractIncidentID(path, prefix, suffix string) (int64, error) {
+	trimmed := strings.TrimPrefix(path, prefix)
+	idStr := strings.TrimSuffix(trimmed, suffix)
+	return strconv.ParseInt(idStr, 10, 64)
+}
+
+func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+
+	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/acknowledge")
+	if err != nil {
+		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		return
+	}
+
+	// Determine assignee: prefer authenticated user, fall back to request body.
+	var body struct {
+		Assignee string `json:"assignee"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	assignee := body.Assignee
+	if user := UserFromContext(r.Context()); user != nil && user.Email != "" {
+		assignee = user.Email
+	}
+	if assignee == "" {
+		http.Error(w, `{"error":"assignee required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Transition: processing or reported → acknowledged.
+	result, err := h.db.ExecContext(r.Context(),
+		`UPDATE triage.reports
+		 SET state = 'acknowledged', assigned_to = $2, acknowledged_at = NOW()
+		 WHERE id = $1 AND state IN ('processing', 'reported')`,
+		id, assignee)
+	if err != nil {
+		h.logger.Error("acknowledge incident", "error", err, "id", id)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		http.Error(w, `{"error":"incident not found or already acknowledged/resolved"}`, http.StatusConflict)
+		return
+	}
+
+	h.logger.Info("incident acknowledged", "id", id, "by", assignee)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":          id,
+		"state":       "acknowledged",
+		"assigned_to": assignee,
+	})
+}
+
+func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+
+	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/escalate")
+	if err != nil {
+		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		Level  string `json:"level"`
+		Target string `json:"target"`
+	}
+	if r.Body == nil {
+		http.Error(w, `{"error":"request body required"}`, http.StatusBadRequest)
+		return
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Validate escalation level.
+	switch body.Level {
+	case "L1", "L2", "L3":
+	default:
+		http.Error(w, `{"error":"level must be L1, L2, or L3"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Target == "" {
+		http.Error(w, `{"error":"target required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Escalation does NOT change state — only sets attributes.
+	result, err := h.db.ExecContext(r.Context(),
+		`UPDATE triage.reports
+		 SET escalation_level = $2, escalated_to = $3, escalated_at = NOW()
+		 WHERE id = $1 AND state IN ('processing', 'reported', 'acknowledged')`,
+		id, body.Level, body.Target)
+	if err != nil {
+		h.logger.Error("escalate incident", "error", err, "id", id)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		http.Error(w, `{"error":"incident not found or already resolved"}`, http.StatusConflict)
+		return
+	}
+
+	h.logger.Info("incident escalated", "id", id, "level", body.Level, "target", body.Target)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":               id,
+		"escalation_level": body.Level,
+		"escalated_to":     body.Target,
+	})
+}
+
+func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 65536) // 64KB max for notes
+
+	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/notes")
+	if err != nil {
+		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		Body string `json:"body"`
+	}
+	if r.Body == nil {
+		http.Error(w, `{"error":"request body required"}`, http.StatusBadRequest)
+		return
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Body == "" {
+		http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Determine author from auth context.
+	author := "anonymous"
+	if user := UserFromContext(r.Context()); user != nil && user.Email != "" {
+		author = user.Email
+	}
+
+	var noteID int64
+	err = h.db.QueryRowContext(r.Context(),
+		`INSERT INTO triage.incident_notes (incident_id, author, body)
+		 VALUES ($1, $2, $3) RETURNING id`,
+		id, author, body.Body).Scan(&noteID)
+	if err != nil {
+		var pgErr *pq.Error
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			http.Error(w, `{"error":"incident not found"}`, http.StatusNotFound)
+			return
+		}
+		h.logger.Error("add note", "error", err, "incident_id", id)
+		http.Error(w, `{"error":"failed to add note"}`, http.StatusInternalServerError)
+		return
+	}
+
+	h.logger.Info("note added", "incident_id", id, "note_id", noteID, "author", author)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":          noteID,
+		"incident_id": id,
+		"author":      author,
+	})
 }
 
 // cacheHeaders wraps an http.Handler to add immutable cache headers for static assets.
