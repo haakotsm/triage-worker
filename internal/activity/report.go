@@ -212,14 +212,14 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		-- Make completed_at nullable for in-flight reports.
 		ALTER TABLE triage.reports ALTER COLUMN completed_at DROP NOT NULL;
 
+		-- Normalize legacy internal-phase states BEFORE adding constraint.
+		UPDATE triage.reports SET state = 'processing'
+			WHERE state IN ('correlating', 'enriching', 'triaging');
+
 		-- Update lifecycle state constraint to the lean 4-state model.
-		-- Drop old constraint first (may have old values), then create new one.
-		DO $$ BEGIN
-			ALTER TABLE triage.reports DROP CONSTRAINT IF EXISTS chk_state;
-			ALTER TABLE triage.reports ADD CONSTRAINT chk_state
-				CHECK (state IN ('processing','reported','acknowledged','resolved'));
-		EXCEPTION WHEN duplicate_object THEN NULL;
-		END $$;
+		ALTER TABLE triage.reports DROP CONSTRAINT IF EXISTS chk_state;
+		ALTER TABLE triage.reports ADD CONSTRAINT chk_state
+			CHECK (state IN ('processing','reported','acknowledged','resolved'));
 
 		-- Incident notes table for append-only operator commentary.
 		CREATE TABLE IF NOT EXISTS triage.incident_notes (
@@ -251,11 +251,7 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		-- Index for acknowledged incidents lookup.
 		CREATE INDEX IF NOT EXISTS idx_reports_assigned_to ON triage.reports (assigned_to) WHERE assigned_to IS NOT NULL;
 
-		-- Normalize legacy internal-phase states to 'processing'.
-		UPDATE triage.reports SET state = 'processing'
-			WHERE state IN ('correlating', 'enriching', 'triaging');
-
-		-- Backfill state for existing rows.
+		-- Backfill state for existing rows that were resolved before state tracking.
 		UPDATE triage.reports SET state = 'resolved' WHERE resolved_at IS NOT NULL AND state = 'reported';
 
 		-- NOTIFY trigger on report changes — fires when tracked columns change.
