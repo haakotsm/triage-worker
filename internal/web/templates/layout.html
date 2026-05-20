@@ -52,7 +52,9 @@
     function showToast(msg, cls) {
       var el = document.createElement('div');
       el.className = 'alert ' + cls + ' shadow-lg text-sm';
-      el.innerHTML = '<span>' + msg + '</span>';
+      var span = document.createElement('span');
+      span.textContent = msg;
+      el.appendChild(span);
       document.getElementById('toast-container').appendChild(el);
       setTimeout(function() { el.remove(); }, 5000);
     }

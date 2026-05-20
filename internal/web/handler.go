@@ -320,85 +320,9 @@ func (h *Handler) renderError(w http.ResponseWriter, msg string) {
 
 // fetchDashboardData queries reports for the dashboard.
 func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
-	q := r.URL.Query()
-	limit := intParam(q.Get("limit"), 20, 1, 100)
-	offset := intParam(q.Get("offset"), 0, 0, 10000)
-	severity := q.Get("severity")
-	search := q.Get("search")
-	status := q.Get("status")
-	sort := q.Get("sort")
-	dir := q.Get("dir")
-
-	// Validate sort field (whitelist to prevent SQL injection).
-	validSorts := map[string]string{
-		"severity":  "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END",
-		"workload":  "workload",
-		"namespace": "namespace",
-		"alert":     "alert_name",
-		"blast":     "CASE blast_radius WHEN 'cluster' THEN 0 WHEN 'namespace' THEN 1 WHEN 'deployment' THEN 2 ELSE 3 END",
-		"age":       "COALESCE(completed_at, created_at)",
-		"status":    "CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END",
-	}
-	if _, ok := validSorts[sort]; !ok {
-		sort = "" // fall back to default sort
-	}
-	if dir != "asc" && dir != "desc" {
-		dir = "desc"
-	}
-
-	where := "WHERE 1=1"
-	args := []interface{}{}
-	argIdx := 1
-
-	if severity != "" {
-		where += " AND severity = $" + strconv.Itoa(argIdx)
-		args = append(args, severity)
-		argIdx++
-	}
-	if search != "" {
-		where += fmt.Sprintf(" AND (workload ILIKE $%d OR namespace ILIKE $%d OR alert_name ILIKE $%d)", argIdx, argIdx, argIdx)
-		args = append(args, "%"+search+"%")
-		argIdx++
-	}
-	switch status {
-	case "active":
-		where += " AND resolved_at IS NULL"
-	case "resolved":
-		where += " AND resolved_at IS NOT NULL"
-	}
-
-	// Count query — only completed/resolved reports.
-	var totalCount int
-	countQuery := "SELECT COUNT(*) FROM triage.reports " + where + " AND state IN ('reported', 'resolved')"
-	if err := h.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount); err != nil {
-		return DashboardData{}, fmt.Errorf("count: %w", err)
-	}
-
-	// Build ORDER BY — user sort takes precedence, default by active-first → severity → newest.
-	orderBy := `ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END,
-			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
-			created_at DESC`
-	if sort != "" {
-		orderBy = fmt.Sprintf("ORDER BY %s %s", validSorts[sort], dir)
-	}
-
-	// Data query — only show completed/resolved reports (not in-flight).
-	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
-		classification, severity, root_cause, causal_chain, evidence,
-		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
-		FROM triage.reports %s AND state IN ('reported', 'resolved')
-		%s
-		LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
-	// Explicit copy to avoid mutating args' backing array.
-	dataArgs := make([]interface{}, len(args)+2)
-	copy(dataArgs, args)
-	dataArgs[len(args)] = limit
-	dataArgs[len(args)+1] = offset
-
-	reports, err := h.queryReports(r.Context(), dataQuery, dataArgs...)
+	data, err := h.fetchReportTableData(r)
 	if err != nil {
-		return DashboardData{}, fmt.Errorf("query: %w", err)
+		return DashboardData{}, err
 	}
 
 	// Fetch aggregate stats (non-fatal if it fails).
@@ -413,20 +337,20 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		h.logger.Warn("fetch incidents for dashboard", "error", err)
 	}
 
-	return DashboardData{
-		Reports:    reports,
-		Stats:      stats,
-		Incidents:  incidents,
-		TotalCount: totalCount,
-		Limit:      limit,
-		Offset:     offset,
-		Query:      search,
-		Severity:   severity,
-		Status:     status,
-		Sort:       sort,
-		Dir:        dir,
-		SSEEnabled: h.sse != nil,
-	}, nil
+	data.Stats = stats
+	data.Incidents = incidents
+	return data, nil
+}
+
+// validSortFields maps user-facing sort keys to SQL expressions (whitelist to prevent injection).
+var validSortFields = map[string]string{
+	"severity":  "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END",
+	"workload":  "workload",
+	"namespace": "namespace",
+	"alert":     "alert_name",
+	"blast":     "CASE blast_radius WHEN 'cluster' THEN 0 WHEN 'namespace' THEN 1 WHEN 'deployment' THEN 2 ELSE 3 END",
+	"age":       "COALESCE(completed_at, created_at)",
+	"status":    "CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END",
 }
 
 // fetchReportTableData is a lightweight version of fetchDashboardData that only
@@ -442,16 +366,7 @@ func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
 	dir := q.Get("dir")
 
 	// Validate sort field.
-	validSorts := map[string]string{
-		"severity":  "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END",
-		"workload":  "workload",
-		"namespace": "namespace",
-		"alert":     "alert_name",
-		"blast":     "CASE blast_radius WHEN 'cluster' THEN 0 WHEN 'namespace' THEN 1 WHEN 'deployment' THEN 2 ELSE 3 END",
-		"age":       "COALESCE(completed_at, created_at)",
-		"status":    "CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END",
-	}
-	if _, ok := validSorts[sort]; !ok {
+	if _, ok := validSortFields[sort]; !ok {
 		sort = ""
 	}
 	if dir != "asc" && dir != "desc" {
@@ -489,7 +404,7 @@ func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
 			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
 			created_at DESC`
 	if sort != "" {
-		orderBy = fmt.Sprintf("ORDER BY %s %s", validSorts[sort], dir)
+		orderBy = fmt.Sprintf("ORDER BY %s %s", validSortFields[sort], dir)
 	}
 
 	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,

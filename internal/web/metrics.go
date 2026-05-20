@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -83,12 +84,13 @@ func (rw *responseWriter) WriteHeader(code int) {
 	if !rw.written {
 		rw.statusCode = code
 		rw.written = true
+		rw.ResponseWriter.WriteHeader(code)
 	}
-	rw.ResponseWriter.WriteHeader(code)
 }
 
 func (rw *responseWriter) Write(b []byte) (int, error) {
 	if !rw.written {
+		rw.statusCode = http.StatusOK
 		rw.written = true
 	}
 	return rw.ResponseWriter.Write(b)
@@ -112,9 +114,9 @@ func normalizePath(path string) string {
 		return "/partials/stats"
 	case path == "/partials/incidents":
 		return "/partials/incidents"
-	case len(path) > 9 && path[:9] == "/reports/":
+	case strings.HasPrefix(path, "/reports/"):
 		return "/reports/:id"
-	case len(path) > 8 && path[:8] == "/static/":
+	case strings.HasPrefix(path, "/static/"):
 		return "/static/*"
 	default:
 		return "/other"

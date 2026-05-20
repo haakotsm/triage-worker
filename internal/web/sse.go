@@ -112,6 +112,12 @@ func (b *SSEBroker) dispatchLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Stop the debounce timer to prevent post-shutdown callback races.
+			b.debounceMu.Lock()
+			if b.debounceTimer != nil {
+				b.debounceTimer.Stop()
+			}
+			b.debounceMu.Unlock()
 			// Flush any pending debounced events before exit.
 			b.flushPendingEvents()
 			return

@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"log/slog"
 	"net/http"
@@ -80,13 +81,14 @@ func (cm *CSRFMiddleware) ensureCookie(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := cm.generateToken()
+	isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{
 		Name:     csrfCookieName,
 		Value:    token,
 		Path:     "/",
 		MaxAge:   int(csrfMaxAge.Seconds()),
 		HttpOnly: false, // JS needs to read it for hx-headers
-		Secure:   r.TLS != nil,
+		Secure:   isSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
 }
@@ -94,23 +96,14 @@ func (cm *CSRFMiddleware) ensureCookie(w http.ResponseWriter, r *http.Request) {
 func (cm *CSRFMiddleware) generateToken() string {
 	b := make([]byte, csrfTokenLength)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback: this should never happen but don't panic in production.
-		return hex.EncodeToString(b[:16])
+		panic("csrf: crypto/rand unavailable: " + err.Error())
 	}
 	return hex.EncodeToString(b)
 }
 
 // secureCompare does constant-time comparison to prevent timing attacks.
 func secureCompare(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	// Use subtle.ConstantTimeCompare equivalent via XOR accumulation.
-	var result byte
-	for i := range []byte(a) {
-		result |= a[i] ^ b[i]
-	}
-	return result == 0
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // CSRFToken extracts the current CSRF token from the request (for template rendering).
