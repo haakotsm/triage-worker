@@ -138,10 +138,8 @@ func (b *SSEBroker) dispatchLoop(ctx context.Context) {
 			}
 			if json.Unmarshal([]byte(n.Extra), &payload) == nil {
 				switch payload.State {
-				case "processing":
+				case "processing", "reported", "acknowledged", "resolved":
 					eventName = "incident-update"
-				case "acknowledged":
-					eventName = "incident-acknowledged"
 				}
 			}
 			b.debouncedBroadcast(SSEEvent{Name: eventName, Data: n.Extra})
