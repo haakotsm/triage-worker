@@ -930,6 +930,7 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/acknowledge")
 	if err != nil {
@@ -987,6 +988,7 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 
 	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/escalate")
 	if err != nil {
@@ -1053,6 +1055,7 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 65536) // 64KB max for notes
 
 	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/notes")
 	if err != nil {
