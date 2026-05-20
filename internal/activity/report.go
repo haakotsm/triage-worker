@@ -98,28 +98,34 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 }
 
 // UpdateIncidentState transitions a report's lifecycle state.
-// Valid states: correlating, enriching, triaging, reported, resolved.
+// Operator-visible states: processing, reported, acknowledged, resolved.
+// Internal phases (correlating, enriching, triaging) are normalized to 'processing'.
 // State can only move forward (monotonic) to prevent backward transitions from retries.
 func (r *ReportActivity) UpdateIncidentState(ctx context.Context, workflowID, state, severity string) error {
 	if r.DB == nil {
 		return nil
 	}
+
+	// Normalize internal automation phases to the single operator-visible state.
+	switch state {
+	case "correlating", "enriching", "triaging":
+		state = "processing"
+	}
+
 	_, err := r.DB.ExecContext(ctx,
 		`UPDATE triage.reports SET state = $2, severity = CASE WHEN $3 = '' THEN severity ELSE $3 END
 		 WHERE workflow_id = $1
 		   AND CASE state
-		     WHEN 'correlating' THEN 1
-		     WHEN 'enriching'   THEN 2
-		     WHEN 'triaging'    THEN 3
-		     WHEN 'reported'    THEN 4
-		     WHEN 'resolved'    THEN 5
+		     WHEN 'processing'   THEN 1
+		     WHEN 'reported'     THEN 2
+		     WHEN 'acknowledged' THEN 3
+		     WHEN 'resolved'     THEN 4
 		     ELSE 0
 		   END < CASE $2::text
-		     WHEN 'correlating' THEN 1
-		     WHEN 'enriching'   THEN 2
-		     WHEN 'triaging'    THEN 3
-		     WHEN 'reported'    THEN 4
-		     WHEN 'resolved'    THEN 5
+		     WHEN 'processing'   THEN 1
+		     WHEN 'reported'     THEN 2
+		     WHEN 'acknowledged' THEN 3
+		     WHEN 'resolved'     THEN 4
 		     ELSE 0
 		   END`,
 		workflowID, state, severity,
@@ -131,7 +137,7 @@ func (r *ReportActivity) UpdateIncidentState(ctx context.Context, workflowID, st
 }
 
 // CreateIncident inserts a preliminary report row for realtime lifecycle tracking.
-// The row is created with state='correlating' and placeholder defaults. The full
+// The row is created with state='processing' and placeholder defaults. The full
 // report data is filled in later by StoreTriageReport via UPSERT.
 func (r *ReportActivity) CreateIncident(ctx context.Context, workflowID, namespace, workload, kind, alertName string) error {
 	if r.DB == nil {
@@ -139,7 +145,7 @@ func (r *ReportActivity) CreateIncident(ctx context.Context, workflowID, namespa
 	}
 	_, err := r.DB.ExecContext(ctx,
 		`INSERT INTO triage.reports (workflow_id, namespace, workload, kind, alert_name, state)
-		 VALUES ($1, $2, $3, $4, $5, 'correlating')
+		 VALUES ($1, $2, $3, $4, $5, 'processing')
 		 ON CONFLICT (workflow_id) DO NOTHING`,
 		workflowID, namespace, workload, kind, alertName,
 	)
@@ -193,15 +199,39 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS blast_radius TEXT NOT NULL DEFAULT 'pod';
 		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'reported';
 
+		-- Incident workflow columns (v2 lean model).
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS assigned_to TEXT;
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ;
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS escalated_to TEXT;
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS escalation_level TEXT;
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS resolution_note TEXT;
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS resolution_source TEXT;
+		ALTER TABLE triage.reports ADD COLUMN IF NOT EXISTS mitigation_started_at TIMESTAMPTZ;
+
 		-- Make completed_at nullable for in-flight reports.
 		ALTER TABLE triage.reports ALTER COLUMN completed_at DROP NOT NULL;
 
-		-- Enforce valid lifecycle states.
+		-- Update lifecycle state constraint to the lean 4-state model.
+		-- Drop old constraint first (may have old values), then create new one.
 		DO $$ BEGIN
+			ALTER TABLE triage.reports DROP CONSTRAINT IF EXISTS chk_state;
 			ALTER TABLE triage.reports ADD CONSTRAINT chk_state
-				CHECK (state IN ('correlating','enriching','triaging','reported','resolved'));
+				CHECK (state IN ('processing','reported','acknowledged','resolved'));
 		EXCEPTION WHEN duplicate_object THEN NULL;
 		END $$;
+
+		-- Incident notes table for append-only operator commentary.
+		CREATE TABLE IF NOT EXISTS triage.incident_notes (
+			id          BIGSERIAL PRIMARY KEY,
+			incident_id BIGINT NOT NULL REFERENCES triage.reports(id),
+			author      TEXT NOT NULL,
+			body        TEXT NOT NULL,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_incident_notes_incident_created
+			ON triage.incident_notes (incident_id, created_at DESC);
 
 		-- Drop legacy incidents table if it exists (merged into reports).
 		DROP TABLE IF EXISTS triage.incidents;
@@ -218,16 +248,25 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		-- Composite index for dashboard queries (filter by state, sort by created_at).
 		CREATE INDEX IF NOT EXISTS idx_reports_state_created ON triage.reports (state, created_at DESC);
 
+		-- Index for acknowledged incidents lookup.
+		CREATE INDEX IF NOT EXISTS idx_reports_assigned_to ON triage.reports (assigned_to) WHERE assigned_to IS NOT NULL;
+
+		-- Normalize legacy internal-phase states to 'processing'.
+		UPDATE triage.reports SET state = 'processing'
+			WHERE state IN ('correlating', 'enriching', 'triaging');
+
 		-- Backfill state for existing rows.
 		UPDATE triage.reports SET state = 'resolved' WHERE resolved_at IS NOT NULL AND state = 'reported';
 
-		-- NOTIFY trigger on report changes — only fires when tracked columns change.
+		-- NOTIFY trigger on report changes — fires when tracked columns change.
 		CREATE OR REPLACE FUNCTION triage.notify_report_change() RETURNS trigger AS $$
 		BEGIN
 			IF TG_OP = 'INSERT' OR
 			   OLD.state IS DISTINCT FROM NEW.state OR
 			   OLD.severity IS DISTINCT FROM NEW.severity OR
-			   OLD.resolved_at IS DISTINCT FROM NEW.resolved_at THEN
+			   OLD.resolved_at IS DISTINCT FROM NEW.resolved_at OR
+			   OLD.assigned_to IS DISTINCT FROM NEW.assigned_to OR
+			   OLD.escalation_level IS DISTINCT FROM NEW.escalation_level THEN
 				PERFORM pg_notify('report_changes', json_build_object(
 					'id',          NEW.id,
 					'workflow_id', NEW.workflow_id,
@@ -235,7 +274,9 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 					'severity',    NEW.severity,
 					'namespace',   NEW.namespace,
 					'workload',    NEW.workload,
-					'resolved',    (NEW.resolved_at IS NOT NULL)
+					'resolved',    (NEW.resolved_at IS NOT NULL),
+					'assigned_to', COALESCE(NEW.assigned_to, ''),
+					'escalation_level', COALESCE(NEW.escalation_level, '')
 				)::text);
 			END IF;
 			RETURN NEW;

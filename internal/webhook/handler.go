@@ -166,7 +166,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		if h.db != nil {
 			_, _ = h.db.ExecContext(ctx,
 				`INSERT INTO triage.reports (workflow_id, namespace, workload, kind, alert_name, state)
-				 VALUES ($1, $2, $3, $4, $5, 'correlating')
+				 VALUES ($1, $2, $3, $4, $5, 'processing')
 				 ON CONFLICT (workflow_id) DO NOTHING`,
 				wfID, identity.Namespace, identity.Name, identity.Kind, identity.AlertName,
 			)

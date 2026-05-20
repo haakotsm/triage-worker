@@ -138,8 +138,10 @@ func (b *SSEBroker) dispatchLoop(ctx context.Context) {
 			}
 			if json.Unmarshal([]byte(n.Extra), &payload) == nil {
 				switch payload.State {
-				case "correlating", "enriching", "triaging":
+				case "processing":
 					eventName = "incident-update"
+				case "acknowledged":
+					eventName = "incident-acknowledged"
 				}
 			}
 			b.debouncedBroadcast(SSEEvent{Name: eventName, Data: n.Extra})
@@ -282,13 +284,13 @@ type Incident struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-// FetchActiveIncidents queries reports that are still in-flight (not yet completed or resolved).
+// FetchActiveIncidents queries reports that are still in-flight or awaiting action.
 func FetchActiveIncidents(ctx context.Context, db *sql.DB) ([]Incident, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at,
 		        COALESCE(completed_at, created_at) as updated_at
 		 FROM triage.reports
-		 WHERE state IN ('correlating', 'enriching', 'triaging')
+		 WHERE state IN ('processing', 'reported', 'acknowledged')
 		 ORDER BY created_at DESC
 		 LIMIT 50`)
 	if err != nil {
@@ -320,7 +322,7 @@ func (b *SSEBroker) BroadcastStatsUpdate(ctx context.Context) {
 	}
 	var s statsPayload
 	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state = 'reported'`).Scan(&s.TotalReports)
-	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state IN ('correlating','enriching','triaging')`).Scan(&s.ActiveCount)
+	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state = 'processing'`).Scan(&s.ActiveCount)
 	data, _ := json.Marshal(s)
 	b.broadcast(SSEEvent{Name: "stats-update", Data: string(data)})
 }

@@ -28,12 +28,12 @@
           <tr class="hover">
             <td>
               <div class="flex items-center gap-2">
-                {{if eq .State "correlating"}}
+                {{if eq .State "processing"}}
                   <span class="loading loading-dots loading-xs text-warning"></span>
-                {{else if eq .State "enriching"}}
-                  <span class="loading loading-spinner loading-xs text-info"></span>
-                {{else if eq .State "triaging"}}
-                  <span class="loading loading-spinner loading-xs text-primary"></span>
+                {{else if eq .State "reported"}}
+                  <span class="text-info">●</span>
+                {{else if eq .State "acknowledged"}}
+                  <span class="text-primary">👤</span>
                 {{else}}
                   <span class="text-success">✓</span>
                 {{end}}
