@@ -12,9 +12,9 @@
     this.$el.closest('[sse-connect]').addEventListener('htmx:sseOpen', () => this.connected = true);
     this.$el.closest('[sse-connect]').addEventListener('htmx:sseClose', () => this.connected = false);
     this.$el.closest('[sse-connect]').addEventListener('htmx:sseError', () => this.connected = false);
-  }}" class="fixed bottom-4 right-4 z-50">
+  }}" class="fixed bottom-4 right-4 z-50" role="status" aria-live="polite" aria-atomic="true">
     <div class="badge badge-sm gap-1" :class="connected ? 'badge-success' : 'badge-error'">
-      <span class="inline-block w-2 h-2 rounded-full" :class="connected ? 'bg-success animate-pulse' : 'bg-error'"></span>
+      <span class="inline-block w-2 h-2 rounded-full" :class="connected ? 'bg-success animate-pulse' : 'bg-error'" aria-hidden="true"></span>
       <span x-text="connected ? 'Live' : 'Reconnecting...'" class="text-xs"></span>
     </div>
   </div>
@@ -50,27 +50,37 @@
       <div class="card bg-base-100 shadow-sm">
         <div class="card-body py-3 px-4">
           <form @submit.prevent class="flex flex-wrap gap-3 items-end">
-            <input type="text" name="search" placeholder="Search workload, namespace, alert..."
-                   class="input input-bordered input-sm w-64"
+            <label class="sr-only" for="search-input">Search reports</label>
+            <input type="text" name="search" id="search-input" placeholder="Search workload, namespace, alert..."
+                   class="input input-bordered input-sm w-full sm:w-64"
                    value="{{.Query}}"
                    hx-get="/partials/reports" hx-trigger="keyup changed delay:300ms"
                    hx-target="#report-list"
-                   hx-include="[name='severity'],[name='status']">
-            <select name="severity" class="select select-bordered select-sm"
+                   hx-include="[name='severity'],[name='status'],[name='sort'],[name='dir']">
+            <label class="sr-only" for="severity-filter">Filter by severity</label>
+            <select name="severity" id="severity-filter" class="select select-bordered select-sm"
                     hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
-                    hx-include="[name='search'],[name='status']">
+                    hx-include="[name='search'],[name='status'],[name='sort'],[name='dir']">
               <option value="">All Severities</option>
               <option value="critical" {{if eq .Severity "critical"}}selected{{end}}>🔴 Critical</option>
               <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>🟡 Warning</option>
               <option value="info" {{if eq .Severity "info"}}selected{{end}}>🔵 Info</option>
             </select>
-            <select name="status" class="select select-bordered select-sm"
+            <label class="sr-only" for="status-filter">Filter by status</label>
+            <select name="status" id="status-filter" class="select select-bordered select-sm"
                     hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
-                    hx-include="[name='search'],[name='severity']">
+                    hx-include="[name='search'],[name='severity'],[name='sort'],[name='dir']">
               <option value="">All Status</option>
               <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
               <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
             </select>
+            {{if or .Query .Severity .Status}}
+            <button class="btn btn-sm btn-ghost" type="button"
+                    hx-get="/partials/reports" hx-target="#report-list"
+                    onclick="document.getElementById('search-input').value='';document.getElementById('severity-filter').value='';document.getElementById('status-filter').value='';">
+              ✕ Clear
+            </button>
+            {{end}}
             <span class="text-sm text-base-content/60 font-mono" id="report-count">
               {{.TotalCount}} report{{if ne .TotalCount 1}}s{{end}}
             </span>
@@ -79,9 +89,13 @@
       </div>
 
       {{/* Report table — refreshes on SSE report events, preserving current page offset */}}
-      <div id="report-list-wrap"
+      <div id="report-list-wrap" class="relative"
            hx-get="/partials/reports" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:refresh, {{end}}every 30s" hx-target="#report-list" hx-swap="outerHTML"
-           hx-include="[name='search'],[name='severity'],[name='status'],[name='offset'],[name='limit']">
+           hx-include="[name='search'],[name='severity'],[name='status'],[name='offset'],[name='limit'],[name='sort'],[name='dir']"
+           hx-indicator="#report-loading">
+        <div id="report-loading" class="htmx-indicator absolute inset-0 bg-base-200/50 flex items-center justify-center z-10 rounded-lg">
+          <span class="loading loading-spinner loading-md text-primary"></span>
+        </div>
         {{template "report-table" .}}
       </div>
     </div>
