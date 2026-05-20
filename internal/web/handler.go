@@ -783,13 +783,13 @@ func templateFuncs() template.FuncMap {
 		},
 		"incidentStateClass": func(state string) string {
 			switch state {
-			case "correlating":
+			case "processing":
 				return "badge-warning"
-			case "enriching":
-				return "badge-info"
-			case "triaging":
-				return "badge-primary"
 			case "reported":
+				return "badge-info"
+			case "acknowledged":
+				return "badge-primary"
+			case "resolved":
 				return "badge-success"
 			default:
 				return "badge-ghost"
