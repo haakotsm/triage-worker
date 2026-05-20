@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -886,14 +887,21 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse optional resolution metadata from JSON body.
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var body struct {
 		Note   string `json:"resolution_note"`
 		Source string `json:"resolution_source"`
 	}
-	if r.Body != nil && r.Header.Get("Content-Type") == "application/json" {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+	if r.Body != nil {
+		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if mediaType == "application/json" {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
 	}
-	if body.Source == "" {
+	switch body.Source {
+	case "manual", "automated", "escalated", "api":
+		// valid
+	default:
 		body.Source = "manual"
 	}
 
