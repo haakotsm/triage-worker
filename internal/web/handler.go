@@ -127,11 +127,22 @@ type Handler struct {
 	db       *sql.DB
 	logger   *slog.Logger
 	sse      *SSEBroker // optional: nil if SSE not configured
+	retriage RetrieveStarter // optional: starts re-triage workflows
+}
+
+// RetrieveStarter starts a new triage workflow for re-analysis.
+type RetrieveStarter interface {
+	StartRetriage(ctx context.Context, workflowID, namespace, workload, kind, alertName string) (string, error)
 }
 
 // SetSSEBroker attaches an SSE broker for realtime event streaming.
 func (h *Handler) SetSSEBroker(b *SSEBroker) {
 	h.sse = b
+}
+
+// SetRetrieveStarter attaches a workflow starter for re-triage functionality.
+func (h *Handler) SetRetrieveStarter(rs RetrieveStarter) {
+	h.retriage = rs
 }
 
 // NewHandler creates a web dashboard handler.
@@ -205,6 +216,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleEscalate(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && strings.HasSuffix(r.URL.Path, "/notes"):
 		h.handleNotes(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && strings.HasSuffix(r.URL.Path, "/retriage"):
+		h.handleRetriage(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/") && strings.HasSuffix(r.URL.Path, "/resolve"):
 		h.handleResolve(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
@@ -945,6 +958,67 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 
 	// Non-htmx: redirect back to report detail.
 	http.Redirect(w, r, "/reports/"+idStr, http.StatusSeeOther)
+}
+
+// handleRetriage triggers a re-triage workflow for an existing incident.
+func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.retriage == nil {
+		http.Error(w, `{"error":"re-triage not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/retriage")
+	if err != nil {
+		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		return
+	}
+
+	// Fetch incident details for re-triage.
+	var workflowID, namespace, workload, kind, alertName, state string
+	err = h.db.QueryRowContext(r.Context(),
+		`SELECT workflow_id, namespace, workload, kind, alert_name, state
+		 FROM triage.reports WHERE id = $1`, id).
+		Scan(&workflowID, &namespace, &workload, &kind, &alertName, &state)
+	if err != nil {
+		http.Error(w, `{"error":"incident not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Cannot re-triage a processing incident (already running).
+	if state == "processing" {
+		http.Error(w, `{"error":"incident is already being processed"}`, http.StatusConflict)
+		return
+	}
+
+	// Enforce re-triage cap: max 3 versions per workload identity.
+	var retriageCount int
+	_ = h.db.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM triage.reports
+		 WHERE namespace = $1 AND workload = $2 AND kind = $3 AND alert_name = $4`,
+		namespace, workload, kind, alertName).Scan(&retriageCount)
+	if retriageCount >= 3 {
+		http.Error(w, `{"error":"re-triage limit reached (max 3)"}`, http.StatusTooManyRequests)
+		return
+	}
+
+	// Start a new triage workflow with a versioned ID.
+	newWfID, err := h.retriage.StartRetriage(r.Context(), workflowID, namespace, workload, kind, alertName)
+	if err != nil {
+		h.logger.Error("start retriage", "error", err, "incident_id", id)
+		http.Error(w, `{"error":"failed to start re-triage"}`, http.StatusInternalServerError)
+		return
+	}
+
+	h.logger.Info("retriage started", "incident_id", id, "new_workflow_id", newWfID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	fmt.Fprintf(w, `{"id":%d,"new_workflow_id":%q,"status":"processing"}`, id, newWfID)
 }
 
 // extractIncidentID parses the incident ID from a path like /api/incidents/:id/action.
