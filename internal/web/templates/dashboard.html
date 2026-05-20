@@ -71,8 +71,11 @@
                     hx-get="/partials/reports" hx-trigger="change" hx-target="#report-list"
                     hx-include="[name='search'],[name='severity'],[name='sort'],[name='dir']">
               <option value="">All Status</option>
-              <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
-              <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
+              <option value="active" {{if eq .Status "active"}}selected{{end}}>🔥 Active</option>
+              <option value="processing" {{if eq .Status "processing"}}selected{{end}}>⏳ Processing</option>
+              <option value="reported" {{if eq .Status "reported"}}selected{{end}}>🔔 Reported</option>
+              <option value="acknowledged" {{if eq .Status "acknowledged"}}selected{{end}}>👤 Acknowledged</option>
+              <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>✓ Resolved</option>
             </select>
             {{if or .Query .Severity .Status}}
             <button class="btn btn-sm btn-ghost" type="button"

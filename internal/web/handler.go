@@ -44,6 +44,9 @@ type Report struct {
 	CompletedAt      *time.Time
 	CreatedAt        time.Time
 	ResolvedAt       *time.Time
+	AssignedTo       string
+	AcknowledgedAt   *time.Time
+	EscalationLevel  string
 }
 
 // Evidence mirrors api.EvidenceItem for template rendering.
@@ -71,13 +74,16 @@ type NameCount struct {
 
 // StatsData provides aggregated metrics for dashboard charts.
 type StatsData struct {
-	ActiveCount    int
-	ResolvedCount  int
-	EscalatedCount int
-	CriticalCount  int
-	WarningCount   int
-	InfoCount      int
-	TotalCount     int
+	ActiveCount       int
+	ResolvedCount     int
+	EscalatedCount    int
+	AcknowledgedCount int
+	ReportedCount     int
+	ProcessingCount   int
+	CriticalCount     int
+	WarningCount      int
+	InfoCount         int
+	TotalCount        int
 
 	BlastCluster    int
 	BlastNamespace  int
@@ -419,6 +425,8 @@ func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
 		where += " AND state = 'processing'"
 	case "acknowledged":
 		where += " AND state = 'acknowledged'"
+	case "reported":
+		where += " AND state = 'reported'"
 	default:
 		// Default: show active + recently resolved (last 24h).
 		where += " AND (state != 'resolved' OR resolved_at > NOW() - INTERVAL '24 hours')"
@@ -440,7 +448,8 @@ func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
 	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
+		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state,
+		assigned_to, acknowledged_at, escalation_level
 		FROM triage.reports %s
 		%s
 		LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
@@ -473,22 +482,25 @@ func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
 	var s StatsData
 
 	// Single query for all counts using PostgreSQL FILTER.
-	// Only count completed reports (state IN reported, resolved) — not in-flight.
 	err := h.db.QueryRowContext(ctx, `SELECT
-		COUNT(*) FILTER (WHERE state = 'reported'),
+		COUNT(*) FILTER (WHERE state IN ('processing', 'reported', 'acknowledged')),
 		COUNT(*) FILTER (WHERE state = 'resolved'),
-		COUNT(*) FILTER (WHERE escalation_needed = true AND state = 'reported'),
-		COUNT(*) FILTER (WHERE severity = 'critical' AND state = 'reported'),
-		COUNT(*) FILTER (WHERE severity = 'warning' AND state = 'reported'),
-		COUNT(*) FILTER (WHERE severity = 'info' AND state = 'reported'),
-		COUNT(*) FILTER (WHERE state IN ('reported', 'resolved')),
-		COUNT(*) FILTER (WHERE blast_radius = 'cluster' AND state = 'reported'),
-		COUNT(*) FILTER (WHERE blast_radius = 'namespace' AND state = 'reported'),
-		COUNT(*) FILTER (WHERE blast_radius = 'deployment' AND state = 'reported'),
-		COUNT(*) FILTER (WHERE blast_radius = 'pod' AND state = 'reported'),
+		COUNT(*) FILTER (WHERE escalation_needed = true AND state != 'resolved'),
+		COUNT(*) FILTER (WHERE state = 'acknowledged'),
+		COUNT(*) FILTER (WHERE state = 'reported'),
+		COUNT(*) FILTER (WHERE state = 'processing'),
+		COUNT(*) FILTER (WHERE severity = 'critical' AND state != 'resolved'),
+		COUNT(*) FILTER (WHERE severity = 'warning' AND state != 'resolved'),
+		COUNT(*) FILTER (WHERE severity = 'info' AND state != 'resolved'),
+		COUNT(*),
+		COUNT(*) FILTER (WHERE blast_radius = 'cluster' AND state != 'resolved'),
+		COUNT(*) FILTER (WHERE blast_radius = 'namespace' AND state != 'resolved'),
+		COUNT(*) FILTER (WHERE blast_radius = 'deployment' AND state != 'resolved'),
+		COUNT(*) FILTER (WHERE blast_radius = 'pod' AND state != 'resolved'),
 		COALESCE(AVG(EXTRACT(EPOCH FROM (resolved_at - started_at))) FILTER (WHERE state = 'resolved'), 0)
 		FROM triage.reports`).Scan(
 		&s.ActiveCount, &s.ResolvedCount, &s.EscalatedCount,
+		&s.AcknowledgedCount, &s.ReportedCount, &s.ProcessingCount,
 		&s.CriticalCount, &s.WarningCount, &s.InfoCount, &s.TotalCount,
 		&s.BlastCluster, &s.BlastNamespace, &s.BlastDeployment, &s.BlastPod,
 		&s.MTTRSeconds,
@@ -593,7 +605,8 @@ func (h *Handler) fetchReport(ctx context.Context, idStr string) (*Report, error
 	query := `SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
+		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state,
+		assigned_to, acknowledged_at, escalation_level
 		FROM triage.reports WHERE `
 
 	var args []interface{}
@@ -629,7 +642,8 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 	for rows.Next() {
 		var r Report
 		var causalChainJSON, evidenceJSON, recommendationsJSON []byte
-		var resolvedAt, completedAt sql.NullTime
+		var resolvedAt, completedAt, acknowledgedAt sql.NullTime
+		var assignedTo, escalationLevel sql.NullString
 
 		err := rows.Scan(
 			&r.ID, &r.WorkflowID, &r.Namespace, &r.Workload, &r.Kind, &r.AlertName,
@@ -638,6 +652,7 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 			&r.Confidence, &r.EscalationNeeded, &r.AlertCount,
 			&r.StartedAt, &completedAt, &r.CreatedAt, &resolvedAt,
 			&r.Summary, &r.BlastRadius, &r.State,
+			&assignedTo, &acknowledgedAt, &escalationLevel,
 		)
 		if err != nil {
 			return nil, err
@@ -648,6 +663,15 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 		}
 		if completedAt.Valid {
 			r.CompletedAt = &completedAt.Time
+		}
+		if acknowledgedAt.Valid {
+			r.AcknowledgedAt = &acknowledgedAt.Time
+		}
+		if assignedTo.Valid {
+			r.AssignedTo = assignedTo.String
+		}
+		if escalationLevel.Valid {
+			r.EscalationLevel = escalationLevel.String
 		}
 
 		if len(causalChainJSON) > 0 {
@@ -814,15 +838,43 @@ func templateFuncs() template.FuncMap {
 		"incidentStateClass": func(state string) string {
 			switch state {
 			case "processing":
-				return "badge-warning"
+				return "badge-ghost opacity-60"
 			case "reported":
-				return "badge-info"
+				return "badge-error animate-pulse"
 			case "acknowledged":
-				return "badge-primary"
+				return "badge-info"
 			case "resolved":
-				return "badge-success"
+				return "badge-success opacity-70"
 			default:
 				return "badge-ghost"
+			}
+		},
+		"stateIcon": func(state string) string {
+			switch state {
+			case "processing":
+				return "⏳"
+			case "reported":
+				return "🔔"
+			case "acknowledged":
+				return "👤"
+			case "resolved":
+				return "✓"
+			default:
+				return "❓"
+			}
+		},
+		"stateLabel": func(state string) string {
+			switch state {
+			case "processing":
+				return "Processing"
+			case "reported":
+				return "Reported"
+			case "acknowledged":
+				return "Acknowledged"
+			case "resolved":
+				return "Resolved"
+			default:
+				return state
 			}
 		},
 		"sortIndicator": func(col, activeSort, activeDir string) template.HTML {
