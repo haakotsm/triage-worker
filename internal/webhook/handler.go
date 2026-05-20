@@ -167,12 +167,15 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		// Dedup: skip if same workload was resolved within the last 5 minutes.
 		if h.db != nil {
 			var recentResolve int
-			_ = h.db.QueryRowContext(ctx,
+			if err := h.db.QueryRowContext(ctx,
 				`SELECT COUNT(*) FROM triage.reports
 				 WHERE namespace = $1 AND workload = $2 AND kind = $3 AND alert_name = $4
 				   AND state = 'resolved' AND resolved_at > NOW() - INTERVAL '5 minutes'`,
 				identity.Namespace, identity.Name, identity.Kind, identity.AlertName,
-			).Scan(&recentResolve)
+			).Scan(&recentResolve); err != nil {
+				h.logger.Warn("dedup query failed, allowing alert",
+					"error", err, "workflow_id", wfID)
+			}
 			if recentResolve > 0 {
 				h.logger.Info("dedup: skipping re-fire within 5min of resolution",
 					"workflow_id", wfID,

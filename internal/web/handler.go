@@ -997,10 +997,14 @@ func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce re-triage cap: max 3 versions per workload identity.
 	var retriageCount int
-	_ = h.db.QueryRowContext(r.Context(),
+	if err := h.db.QueryRowContext(r.Context(),
 		`SELECT COUNT(*) FROM triage.reports
 		 WHERE namespace = $1 AND workload = $2 AND kind = $3 AND alert_name = $4`,
-		namespace, workload, kind, alertName).Scan(&retriageCount)
+		namespace, workload, kind, alertName).Scan(&retriageCount); err != nil {
+		h.logger.Error("retriage cap query failed", "error", err, "incident_id", id)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
 	if retriageCount >= 3 {
 		http.Error(w, `{"error":"re-triage limit reached (max 3)"}`, http.StatusTooManyRequests)
 		return
@@ -1018,7 +1022,11 @@ func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, `{"id":%d,"new_workflow_id":%q,"status":"processing"}`, id, newWfID)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":              id,
+		"new_workflow_id": newWfID,
+		"status":          "processing",
+	})
 }
 
 // extractIncidentID parses the incident ID from a path like /api/incidents/:id/action.
