@@ -48,6 +48,41 @@ func TestStaticAssets(t *testing.T) {
 	}
 }
 
+func TestTemplateFunctions(t *testing.T) {
+	// Exercise template funcs by calling them directly
+	tests := []struct {
+		state     string
+		wantIcon  string
+		wantClass string
+		wantLabel string
+	}{
+		{"processing", "⏳", "badge-ghost opacity-60", "Processing"},
+		{"reported", "🔔", "badge-error animate-pulse", "Reported"},
+		{"acknowledged", "👤", "badge-info", "Acknowledged"},
+		{"resolved", "✓", "badge-success opacity-70", "Resolved"},
+		{"unknown", "❓", "badge-ghost", "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			// Access template functions indirectly by calling them
+			iconFn := templateFuncs()["stateIcon"].(func(string) string)
+			classFn := templateFuncs()["incidentStateClass"].(func(string) string)
+			labelFn := templateFuncs()["stateLabel"].(func(string) string)
+
+			if got := iconFn(tt.state); got != tt.wantIcon {
+				t.Errorf("stateIcon(%q) = %q, want %q", tt.state, got, tt.wantIcon)
+			}
+			if got := classFn(tt.state); got != tt.wantClass {
+				t.Errorf("incidentStateClass(%q) = %q, want %q", tt.state, got, tt.wantClass)
+			}
+			if got := labelFn(tt.state); got != tt.wantLabel {
+				t.Errorf("stateLabel(%q) = %q, want %q", tt.state, got, tt.wantLabel)
+			}
+		})
+	}
+}
+
 func TestUnknownPath_Returns404(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {
