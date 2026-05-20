@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // Report mirrors api.Report for template rendering.
@@ -915,7 +918,6 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/reports/"+idStr, http.StatusSeeOther)
 }
 
-// cacheHeaders wraps an http.Handler to add immutable cache headers for static assets.
 // extractIncidentID parses the incident ID from a path like /api/incidents/:id/action.
 func extractIncidentID(path, prefix, suffix string) (int64, error) {
 	trimmed := strings.TrimPrefix(path, prefix)
@@ -973,7 +975,11 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"id":%d,"state":"acknowledged","assigned_to":%q}`, id, assignee)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":          id,
+		"state":       "acknowledged",
+		"assigned_to": assignee,
+	})
 }
 
 func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
@@ -1035,7 +1041,11 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"id":%d,"escalation_level":%q,"escalated_to":%q}`, id, body.Level, body.Target)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":               id,
+		"escalation_level": body.Level,
+		"escalated_to":     body.Target,
+	})
 }
 
 func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
@@ -1057,7 +1067,11 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"request body required"}`, http.StatusBadRequest)
 		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Body == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Body == "" {
 		http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
 		return
 	}
@@ -1074,6 +1088,11 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		 VALUES ($1, $2, $3) RETURNING id`,
 		id, author, body.Body).Scan(&noteID)
 	if err != nil {
+		var pgErr *pq.Error
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			http.Error(w, `{"error":"incident not found"}`, http.StatusNotFound)
+			return
+		}
 		h.logger.Error("add note", "error", err, "incident_id", id)
 		http.Error(w, `{"error":"failed to add note"}`, http.StatusInternalServerError)
 		return
@@ -1083,9 +1102,14 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, `{"id":%d,"incident_id":%d,"author":%q}`, noteID, id, author)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":          noteID,
+		"incident_id": id,
+		"author":      author,
+	})
 }
 
+// cacheHeaders wraps an http.Handler to add immutable cache headers for static assets.
 func cacheHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
