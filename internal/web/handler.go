@@ -395,13 +395,20 @@ func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
 	}
 	switch status {
 	case "active":
-		where += " AND resolved_at IS NULL"
+		where += " AND state IN ('processing', 'reported', 'acknowledged')"
 	case "resolved":
-		where += " AND resolved_at IS NOT NULL"
+		where += " AND state = 'resolved'"
+	case "processing":
+		where += " AND state = 'processing'"
+	case "acknowledged":
+		where += " AND state = 'acknowledged'"
+	default:
+		// Default: show active + recently resolved (last 24h).
+		where += " AND (state != 'resolved' OR resolved_at > NOW() - INTERVAL '24 hours')"
 	}
 
 	var totalCount int
-	countQuery := "SELECT COUNT(*) FROM triage.reports " + where + " AND state IN ('reported', 'resolved')"
+	countQuery := "SELECT COUNT(*) FROM triage.reports " + where
 	if err := h.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount); err != nil {
 		return DashboardData{}, fmt.Errorf("count: %w", err)
 	}
@@ -417,7 +424,7 @@ func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
 		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
-		FROM triage.reports %s AND state IN ('reported', 'resolved')
+		FROM triage.reports %s
 		%s
 		LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
 	dataArgs := make([]interface{}, len(args)+2)
@@ -875,11 +882,25 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse optional resolution metadata from JSON body.
+	var body struct {
+		Note   string `json:"resolution_note"`
+		Source string `json:"resolution_source"`
+	}
+	if r.Body != nil && r.Header.Get("Content-Type") == "application/json" {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	if body.Source == "" {
+		body.Source = "manual"
+	}
+
 	// Resolve: only transition if not already resolved (race guard).
 	result, err := h.db.ExecContext(r.Context(),
 		`UPDATE triage.reports
-		 SET state = 'resolved', resolved_at = NOW()
-		 WHERE id = $1 AND state != 'resolved'`, id)
+		 SET state = 'resolved', resolved_at = NOW(),
+		     resolution_note = COALESCE(NULLIF($2, ''), resolution_note),
+		     resolution_source = $3
+		 WHERE id = $1 AND state != 'resolved'`, id, body.Note, body.Source)
 	if err != nil {
 		h.logger.Error("resolve report", "error", err, "id", id)
 		http.Error(w, "Failed to resolve", http.StatusInternalServerError)
