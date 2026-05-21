@@ -27,7 +27,7 @@
   </div>
 
   {{/* ═══ ACTIVE INCIDENTS ═══ */}}
-  <div id="incidents-panel" hx-disinherit="*"
+  <div id="incidents-panel"
        hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:refresh, {{end}}every 10s" hx-swap="innerHTML">
     {{template "incidents-table" .}}
   </div>
