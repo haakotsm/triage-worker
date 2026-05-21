@@ -1,0 +1,51 @@
+{{define "timeline"}}
+<div id="incident-timeline" class="card bg-base-100 shadow">
+  <div class="card-body">
+    <h3 class="font-semibold text-lg mb-4">📋 Timeline & Notes</h3>
+
+    {{/* Add Note form */}}
+    {{if and .Report (ne .Report.State "resolved")}}
+    <form class="flex gap-2 mb-4"
+          hx-post="/api/incidents/{{.Report.ID}}/notes"
+          hx-target="#incident-timeline"
+          hx-swap="outerHTML"
+          hx-headers='{"Content-Type": "application/json"}'
+          hx-ext="json-enc"
+          hx-disabled-elt="button[type=submit]"
+          hx-indicator=".note-spinner">
+      <input type="text" name="body" placeholder="Add a note…"
+             class="input input-bordered input-sm flex-1" required
+             minlength="1" maxlength="2000"
+             aria-label="Add a note to this incident" />
+      <button type="submit" class="btn btn-sm btn-primary gap-1">
+        📝 Add
+        <span class="loading loading-spinner loading-xs note-spinner htmx-indicator"></span>
+      </button>
+    </form>
+    {{end}}
+
+    {{/* Timeline entries */}}
+    {{if .Timeline}}
+    <ul class="relative border-l-2 border-base-300 ml-3 flex flex-col gap-0">
+      {{range .Timeline}}
+      <li class="ml-4 pb-4 last:pb-0">
+        <div class="absolute -left-[11px] w-5 h-5 rounded-full bg-base-200 border-2 border-base-300 flex items-center justify-center text-xs"
+             aria-hidden="true">
+          {{.Icon}}
+        </div>
+        <div class="flex flex-col gap-0.5">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-xs text-base-content/50 font-mono">{{formatDate .Time}}</span>
+            <span class="text-xs {{timelineTypeClass .Type}} font-semibold">{{.Actor}}</span>
+          </div>
+          <p class="text-sm break-words {{if eq .Type "note"}}bg-base-200 rounded-lg px-3 py-2 mt-1{{end}}">{{.Message}}</p>
+        </div>
+      </li>
+      {{end}}
+    </ul>
+    {{else}}
+    <p class="text-sm text-base-content/50">No timeline events yet.</p>
+    {{end}}
+  </div>
+</div>
+{{end}}

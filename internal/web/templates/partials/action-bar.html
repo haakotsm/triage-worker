@@ -10,7 +10,7 @@
         <span class="text-sm text-base-content/60">· owned by <span class="font-mono">{{.Report.AssignedTo}}</span></span>
         {{end}}
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 relative" x-data="{ showResolve: false }">
         {{if or (eq .Report.State "processing") (eq .Report.State "reported")}}
         <button class="btn btn-sm btn-primary"
                 hx-post="/api/incidents/{{.Report.ID}}/acknowledge"
@@ -23,10 +23,7 @@
         {{end}}
         {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
         <button class="btn btn-sm btn-success"
-                hx-post="/reports/{{.Report.ID}}/resolve"
-                hx-target="#action-bar"
-                hx-swap="outerHTML"
-                hx-confirm="Resolve this incident?"
+                @click="showResolve = !showResolve"
                 aria-label="Resolve this incident">
           ✓ Resolve
         </button>
@@ -45,6 +42,38 @@
         </button>
         {{end}}
         <span class="loading loading-spinner loading-xs action-spinner htmx-indicator"></span>
+      {{/* Resolve form (inline, toggled by Alpine) */}}
+      {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
+      <div x-show="showResolve" x-cloak x-transition
+           class="absolute right-0 top-full mt-2 z-10 card bg-base-200 shadow-lg border border-base-300 w-80">
+        <div class="card-body p-4">
+          <h4 class="font-semibold text-sm mb-2">Resolve Incident</h4>
+          <form hx-post="/reports/{{.Report.ID}}/resolve"
+                hx-target="#action-bar"
+                hx-swap="outerHTML"
+                hx-headers='{"Content-Type": "application/json"}'
+                hx-ext="json-enc">
+            <div class="form-control mb-2">
+              <input type="text" name="resolution_note" placeholder="Resolution note (optional)"
+                     class="input input-bordered input-sm w-full"
+                     aria-label="Resolution note" />
+            </div>
+            <div class="form-control mb-3">
+              <select name="resolution_source" class="select select-bordered select-sm w-full"
+                      aria-label="Resolution source">
+                <option value="manual">Manual fix</option>
+                <option value="automated">Auto-resolved</option>
+                <option value="escalated">Resolved by escalation</option>
+              </select>
+            </div>
+            <div class="flex gap-2 justify-end">
+              <button type="button" class="btn btn-xs btn-ghost" @click="showResolve = false">Cancel</button>
+              <button type="submit" class="btn btn-xs btn-success">Confirm Resolve</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      {{end}}
       </div>
     </div>
   </div>
