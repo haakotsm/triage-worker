@@ -118,11 +118,30 @@ type DashboardData struct {
 	SSEEnabled bool
 }
 
+// Note represents an operator note attached to an incident.
+type Note struct {
+	ID        int64
+	Author    string
+	Body      string
+	CreatedAt time.Time
+}
+
+// TimelineEntry represents a single event in the incident timeline.
+type TimelineEntry struct {
+	Icon    string
+	Time    time.Time
+	Actor   string
+	Message string
+	Type    string // "created", "acknowledged", "escalated", "resolved", "note"
+}
+
 // DetailData is the template data for the report detail page.
 type DetailData struct {
-	Report          Report
-	L1Commands      []Recommendation
-	AgentRecs       []Recommendation
+	Report     Report
+	L1Commands []Recommendation
+	AgentRecs  []Recommendation
+	Notes      []Note
+	Timeline   []TimelineEntry
 }
 
 // Handler serves the web dashboard and static assets.
@@ -300,10 +319,22 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fetch notes for the timeline
+	notes, err := h.fetchNotes(r.Context(), report.ID)
+	if err != nil {
+		h.logger.Error("fetch notes", "error", err, "report_id", report.ID)
+		// Non-fatal: continue without notes
+		notes = nil
+	}
+
+	timeline := h.buildTimeline(report, notes)
+
 	data := DetailData{
 		Report:     *report,
 		L1Commands: l1,
 		AgentRecs:  agent,
+		Notes:      notes,
+		Timeline:   timeline,
 	}
 
 	if isHTMX(r) {
@@ -877,6 +908,26 @@ func templateFuncs() template.FuncMap {
 				return state
 			}
 		},
+		"formatTime": func(t time.Time) string {
+			return t.Format("15:04")
+		},
+		"formatDate": func(t time.Time) string {
+			return t.Format("Jan 2, 15:04")
+		},
+		"timelineTypeClass": func(typ string) string {
+			switch typ {
+			case "acknowledged":
+				return "text-info"
+			case "escalated":
+				return "text-warning"
+			case "resolved":
+				return "text-success"
+			case "note":
+				return "text-primary"
+			default:
+				return "text-base-content/60"
+			}
+		},
 		"sortIndicator": func(col, activeSort, activeDir string) template.HTML {
 			if col != activeSort {
 				return template.HTML(`<span class="opacity-30">⇅</span>`)
@@ -1303,6 +1354,21 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("note added", "incident_id", id, "note_id", noteID, "author", author)
 
+	// If htmx request, return the timeline partial for the entire incident
+	if isHTMX(r) {
+		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
+		if fetchErr == nil && report != nil {
+			notes, _ := h.fetchNotes(r.Context(), report.ID)
+			timeline := h.buildTimeline(report, notes)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			h.render(w, "timeline", map[string]any{
+				"Timeline": timeline,
+				"Report":   report,
+			})
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1310,6 +1376,123 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		"incident_id": id,
 		"author":      author,
 	})
+}
+
+// fetchNotes retrieves all notes for an incident ordered by creation time.
+func (h *Handler) fetchNotes(ctx context.Context, incidentID int64) ([]Note, error) {
+	rows, err := h.db.QueryContext(ctx,
+		`SELECT id, author, body, created_at
+		 FROM triage.incident_notes
+		 WHERE incident_id = $1
+		 ORDER BY created_at DESC`, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []Note
+	for rows.Next() {
+		var n Note
+		if err := rows.Scan(&n.ID, &n.Author, &n.Body, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+// buildTimeline constructs a chronological timeline from report state changes and notes.
+func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
+	var entries []TimelineEntry
+
+	// Incident created
+	entries = append(entries, TimelineEntry{
+		Icon:    "⚙️",
+		Time:    report.CreatedAt,
+		Actor:   "system",
+		Message: "Incident created — " + report.AlertName,
+		Type:    "created",
+	})
+
+	// Completed (reported)
+	if report.CompletedAt != nil {
+		entries = append(entries, TimelineEntry{
+			Icon:    "🔔",
+			Time:    *report.CompletedAt,
+			Actor:   "system",
+			Message: "Triage completed — report ready for review",
+			Type:    "created",
+		})
+	}
+
+	// Acknowledged
+	if report.AcknowledgedAt != nil {
+		actor := report.AssignedTo
+		if actor == "" {
+			actor = "unknown"
+		}
+		entries = append(entries, TimelineEntry{
+			Icon:    "👤",
+			Time:    *report.AcknowledgedAt,
+			Actor:   actor,
+			Message: "Acknowledged by " + actor,
+			Type:    "acknowledged",
+		})
+	}
+
+	// Escalation
+	if report.EscalationLevel != "" {
+		t := report.CreatedAt // fallback
+		if report.AcknowledgedAt != nil {
+			t = *report.AcknowledgedAt
+		}
+		entries = append(entries, TimelineEntry{
+			Icon:    "⬆️",
+			Time:    t,
+			Actor:   "system",
+			Message: "Escalated to " + report.EscalationLevel,
+			Type:    "escalated",
+		})
+	}
+
+	// Notes
+	for _, n := range notes {
+		entries = append(entries, TimelineEntry{
+			Icon:    "📝",
+			Time:    n.CreatedAt,
+			Actor:   n.Author,
+			Message: n.Body,
+			Type:    "note",
+		})
+	}
+
+	// Resolved
+	if report.ResolvedAt != nil {
+		actor := report.AssignedTo
+		if actor == "" {
+			actor = "system"
+		}
+		entries = append(entries, TimelineEntry{
+			Icon:    "✅",
+			Time:    *report.ResolvedAt,
+			Actor:   actor,
+			Message: "Resolved by " + actor,
+			Type:    "resolved",
+		})
+	}
+
+	// Sort by time descending (most recent first)
+	sortTimelineDesc(entries)
+	return entries
+}
+
+// sortTimelineDesc sorts timeline entries by time, newest first.
+func sortTimelineDesc(entries []TimelineEntry) {
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0 && entries[j].Time.After(entries[j-1].Time); j-- {
+			entries[j], entries[j-1] = entries[j-1], entries[j]
+		}
+	}
 }
 
 // cacheHeaders wraps an http.Handler to add immutable cache headers for static assets.
