@@ -25,7 +25,10 @@
         </thead>
         <tbody>
           {{range .Incidents}}
-          <tr class="hover">
+          <tr class="hover cursor-pointer"
+            hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true"
+            hx-trigger="click, keyup[key=='Enter']"
+            tabindex="0" role="link">
             <td>
               <div class="flex items-center gap-2">
                 {{if eq .State "processing"}}
