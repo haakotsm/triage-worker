@@ -1,4 +1,7 @@
 {{define "timeline"}}
+<!-- Tailwind safelist (used by timelineTypeClass in Go):
+     text-info text-warning text-success text-secondary text-primary text-base-content/60
+-->
 <div id="incident-timeline" class="card bg-base-100 shadow">
   <div class="card-body">
     <h3 class="font-semibold text-lg mb-4">📋 Timeline & Notes</h3>
@@ -28,7 +31,7 @@
     {{if .Timeline}}
     <ul class="relative border-l-2 border-base-300 ml-3 flex flex-col gap-0">
       {{range .Timeline}}
-      <li class="ml-4 pb-4 last:pb-0">
+      <li class="relative ml-4 pb-4 last:pb-0">
         <div class="absolute -left-[11px] w-5 h-5 rounded-full bg-base-200 border-2 border-base-300 flex items-center justify-center text-xs"
              aria-hidden="true">
           {{.Icon}}

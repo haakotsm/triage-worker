@@ -922,6 +922,8 @@ func templateFuncs() template.FuncMap {
 				return "text-warning"
 			case "resolved":
 				return "text-success"
+			case "completed":
+				return "text-secondary"
 			case "note":
 				return "text-primary"
 			default:
@@ -1012,6 +1014,13 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if mediaType == "application/json" {
 			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		// Fallback: try form-encoded (in case json-enc extension didn't load)
+		if body.Note == "" && body.Source == "" {
+			if parseErr := r.ParseForm(); parseErr == nil {
+				body.Note = r.FormValue("resolution_note")
+				body.Source = r.FormValue("resolution_source")
+			}
 		}
 	}
 	switch body.Source {
@@ -1321,13 +1330,14 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"request body required"}`, http.StatusBadRequest)
 		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Body == "" {
-		http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
-		return
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Body == "" {
+		// Fallback: try form-encoded (in case json-enc extension didn't load)
+		if parseErr := r.ParseForm(); parseErr == nil && r.FormValue("body") != "" {
+			body.Body = r.FormValue("body")
+		} else if body.Body == "" {
+			http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Determine author from auth context.
@@ -1357,8 +1367,17 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 	// If htmx request, return the timeline partial for the entire incident
 	if isHTMX(r) {
 		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
-		if fetchErr == nil && report != nil {
-			notes, _ := h.fetchNotes(r.Context(), report.ID)
+		if fetchErr != nil {
+			h.logger.Error("fetch report for timeline", "error", fetchErr, "incident_id", id)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<div id="incident-timeline" class="alert alert-warning">Note saved. Refresh to see timeline.</div>`))
+			return
+		}
+		if report != nil {
+			notes, notesErr := h.fetchNotes(r.Context(), report.ID)
+			if notesErr != nil {
+				h.logger.Error("fetch notes for timeline", "error", notesErr, "incident_id", id)
+			}
 			timeline := h.buildTimeline(report, notes)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			h.render(w, "timeline", map[string]any{
@@ -1421,7 +1440,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 			Time:    *report.CompletedAt,
 			Actor:   "system",
 			Message: "Triage completed — report ready for review",
-			Type:    "created",
+			Type:    "completed",
 		})
 	}
 

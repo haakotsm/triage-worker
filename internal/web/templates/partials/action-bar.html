@@ -24,6 +24,7 @@
         {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
         <button class="btn btn-sm btn-success"
                 @click="showResolve = !showResolve"
+                :aria-expanded="showResolve"
                 aria-label="Resolve this incident">
           ✓ Resolve
         </button>
@@ -45,14 +46,17 @@
       {{/* Resolve form (inline, toggled by Alpine) */}}
       {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
       <div x-show="showResolve" x-cloak x-transition
-           class="absolute right-0 top-full mt-2 z-10 card bg-base-200 shadow-lg border border-base-300 w-80">
+           @click.outside="showResolve = false"
+           @keydown.escape.window="showResolve = false"
+           class="absolute right-0 top-full mt-2 z-10 card bg-base-200 shadow-lg border border-base-300 w-80 max-w-[calc(100vw-2rem)]">
         <div class="card-body p-4">
           <h4 class="font-semibold text-sm mb-2">Resolve Incident</h4>
           <form hx-post="/reports/{{.Report.ID}}/resolve"
                 hx-target="#action-bar"
                 hx-swap="outerHTML"
                 hx-headers='{"Content-Type": "application/json"}'
-                hx-ext="json-enc">
+                hx-ext="json-enc"
+                hx-disabled-elt="find button[type=submit]">
             <div class="form-control mb-2">
               <input type="text" name="resolution_note" placeholder="Resolution note (optional)"
                      class="input input-bordered input-sm w-full"
