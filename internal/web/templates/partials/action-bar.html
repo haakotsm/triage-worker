@@ -1,0 +1,52 @@
+{{define "action-bar"}}
+<div id="action-bar" class="card bg-base-100 shadow border-l-4 {{if eq .Report.State "reported"}}border-error{{else if eq .Report.State "acknowledged"}}border-info{{else if eq .Report.State "resolved"}}border-success{{else}}border-base-content/20{{end}}">
+  <div class="card-body py-3">
+    <div class="flex items-center justify-between flex-wrap gap-3">
+      <div class="flex items-center gap-2">
+        <span class="badge {{incidentStateClass .Report.State}} gap-1">
+          {{stateIcon .Report.State}} {{stateLabel .Report.State}}
+        </span>
+        {{if .Report.AssignedTo}}
+        <span class="text-sm text-base-content/60">· owned by <span class="font-mono">{{.Report.AssignedTo}}</span></span>
+        {{end}}
+      </div>
+      <div class="flex items-center gap-2">
+        {{if or (eq .Report.State "processing") (eq .Report.State "reported")}}
+        <button class="btn btn-sm btn-primary"
+                hx-post="/api/incidents/{{.Report.ID}}/acknowledge"
+                hx-target="#action-bar"
+                hx-swap="outerHTML"
+                hx-indicator=".action-spinner"
+                aria-label="Acknowledge this incident">
+          👤 Acknowledge
+        </button>
+        {{end}}
+        {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
+        <button class="btn btn-sm btn-success"
+                hx-post="/reports/{{.Report.ID}}/resolve"
+                hx-target="#action-bar"
+                hx-swap="outerHTML"
+                hx-confirm="Resolve this incident?"
+                aria-label="Resolve this incident">
+          ✓ Resolve
+        </button>
+        {{end}}
+        {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
+        <button class="btn btn-sm btn-warning btn-outline"
+                hx-post="/api/incidents/{{.Report.ID}}/escalate"
+                hx-target="#action-bar"
+                hx-swap="outerHTML"
+                hx-confirm="Escalate this incident to L2?"
+                hx-headers='{"Content-Type": "application/json"}'
+                hx-ext="json-enc"
+                hx-vals='{"level":"L2","target":"oncall"}'
+                aria-label="Escalate this incident">
+          ⬆ Escalate
+        </button>
+        {{end}}
+        <span class="loading loading-spinner loading-xs action-spinner htmx-indicator"></span>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

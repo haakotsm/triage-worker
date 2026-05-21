@@ -31,15 +31,22 @@
                aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
             {{printf "%.0f" .Report.Confidence}}%
           </div>
-          {{if .Report.ResolvedAt}}
-            <span class="badge badge-success">Resolved {{timeAgo (deref .Report.ResolvedAt)}}</span>
-          {{else}}
-            <span class="badge badge-error">Active</span>
+          <span class="badge {{incidentStateClass .Report.State}} gap-1">
+            {{stateIcon .Report.State}} {{stateLabel .Report.State}}
+          </span>
+          {{if .Report.AssignedTo}}
+          <span class="badge badge-outline badge-sm gap-1">👤 {{.Report.AssignedTo}}</span>
+          {{end}}
+          {{if .Report.EscalationLevel}}
+          <span class="badge badge-warning badge-sm gap-1">⬆ {{.Report.EscalationLevel}}</span>
           {{end}}
         </div>
       </div>
     </div>
   </div>
+
+  {{/* Action Bar — rendered from partial for htmx swap compatibility */}}
+  {{template "action-bar" .}}
 
   {{/* Two-column layout: Understand (left) + Act (right) */}}
   <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
