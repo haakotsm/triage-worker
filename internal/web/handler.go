@@ -922,6 +922,8 @@ func templateFuncs() template.FuncMap {
 				return "text-warning"
 			case "resolved":
 				return "text-success"
+			case "completed":
+				return "text-secondary"
 			case "note":
 				return "text-primary"
 			default:
@@ -1357,8 +1359,17 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 	// If htmx request, return the timeline partial for the entire incident
 	if isHTMX(r) {
 		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
-		if fetchErr == nil && report != nil {
-			notes, _ := h.fetchNotes(r.Context(), report.ID)
+		if fetchErr != nil {
+			h.logger.Error("fetch report for timeline", "error", fetchErr, "incident_id", id)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<div id="incident-timeline" class="alert alert-warning">Note saved. Refresh to see timeline.</div>`))
+			return
+		}
+		if report != nil {
+			notes, notesErr := h.fetchNotes(r.Context(), report.ID)
+			if notesErr != nil {
+				h.logger.Error("fetch notes for timeline", "error", notesErr, "incident_id", id)
+			}
 			timeline := h.buildTimeline(report, notes)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			h.render(w, "timeline", map[string]any{
@@ -1421,7 +1432,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 			Time:    *report.CompletedAt,
 			Actor:   "system",
 			Message: "Triage completed — report ready for review",
-			Type:    "created",
+			Type:    "completed",
 		})
 	}
 
