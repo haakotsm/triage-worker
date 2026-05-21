@@ -1015,13 +1015,6 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		if mediaType == "application/json" {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 		}
-		// Fallback: try form-encoded (in case json-enc extension didn't load)
-		if body.Note == "" && body.Source == "" {
-			if parseErr := r.ParseForm(); parseErr == nil {
-				body.Note = r.FormValue("resolution_note")
-				body.Source = r.FormValue("resolution_source")
-			}
-		}
 	}
 	switch body.Source {
 	case "manual", "automated", "escalated", "api":
@@ -1330,14 +1323,13 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"request body required"}`, http.StatusBadRequest)
 		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Body == "" {
-		// Fallback: try form-encoded (in case json-enc extension didn't load)
-		if parseErr := r.ParseForm(); parseErr == nil && r.FormValue("body") != "" {
-			body.Body = r.FormValue("body")
-		} else if body.Body == "" {
-			http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
-			return
-		}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Body == "" {
+		http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
+		return
 	}
 
 	// Determine author from auth context.
