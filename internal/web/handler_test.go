@@ -56,8 +56,8 @@ func TestTemplateFunctions(t *testing.T) {
 		wantClass string
 		wantLabel string
 	}{
-		{"processing", "⏳", "badge-ghost opacity-60", "Processing"},
-		{"reported", "🔔", "badge-error animate-pulse", "Reported"},
+		{"processing", "⏳", "badge-ghost text-base-content/50", "Processing"},
+		{"reported", "🔔", "badge-error animate-pulse motion-reduce:animate-none", "Reported"},
 		{"acknowledged", "👤", "badge-info", "Acknowledged"},
 		{"resolved", "✓", "badge-success opacity-70", "Resolved"},
 		{"unknown", "❓", "badge-ghost", "unknown"},

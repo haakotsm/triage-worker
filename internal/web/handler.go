@@ -838,9 +838,9 @@ func templateFuncs() template.FuncMap {
 		"incidentStateClass": func(state string) string {
 			switch state {
 			case "processing":
-				return "badge-ghost opacity-60"
+				return "badge-ghost text-base-content/50"
 			case "reported":
-				return "badge-error animate-pulse"
+				return "badge-error animate-pulse motion-reduce:animate-none"
 			case "acknowledged":
 				return "badge-info"
 			case "resolved":
@@ -1000,11 +1000,16 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 			`SELECT pg_notify('report_changes', json_build_object('id', $1, 'state', 'resolved')::text)`, id)
 	}
 
-	// If htmx request, return updated badge + success toast.
+	// If htmx request, return updated action-bar partial.
 	if isHTMX(r) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		report, fetchErr := h.fetchReport(r.Context(), idStr)
+		if fetchErr != nil {
+			h.logger.Error("fetch report for htmx response", "error", fetchErr)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("HX-Trigger", "report-resolved")
-		fmt.Fprintf(w, `<span class="badge badge-success badge-sm">Resolved</span>`)
+		h.render(w, "action-bar", map[string]any{"Report": report})
 		return
 	}
 
@@ -1137,6 +1142,18 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("incident acknowledged", "id", id, "by", assignee)
 
+	// If htmx request, return updated action-bar partial.
+	if isHTMX(r) {
+		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
+		if fetchErr != nil {
+			h.logger.Error("fetch report for htmx response", "error", fetchErr)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		h.render(w, "action-bar", map[string]any{"Report": report})
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1168,8 +1185,16 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
-		return
+		// Fallback: try form values (htmx hx-vals with hx-ext="json-enc" sends JSON,
+		// but without the extension it sends form-encoded).
+		if err := r.ParseForm(); err == nil {
+			body.Level = r.FormValue("level")
+			body.Target = r.FormValue("target")
+		}
+		if body.Level == "" {
+			http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Validate escalation level.
@@ -1203,6 +1228,18 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Info("incident escalated", "id", id, "level", body.Level, "target", body.Target)
+
+	// If htmx request, return updated action-bar partial.
+	if isHTMX(r) {
+		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
+		if fetchErr != nil {
+			h.logger.Error("fetch report for htmx response", "error", fetchErr)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		h.render(w, "action-bar", map[string]any{"Report": report})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

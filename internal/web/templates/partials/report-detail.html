@@ -45,47 +45,8 @@
     </div>
   </div>
 
-  {{/* Action Bar */}}
-  <div id="action-bar" class="card bg-base-100 shadow border-l-4 {{if eq .Report.State "reported"}}border-error{{else if eq .Report.State "acknowledged"}}border-info{{else if eq .Report.State "resolved"}}border-success{{else}}border-base-content/20{{end}}">
-    <div class="card-body py-3">
-      <div class="flex items-center justify-between flex-wrap gap-3">
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-base-content/60">Actions:</span>
-        </div>
-        <div class="flex items-center gap-2">
-          {{if or (eq .Report.State "processing") (eq .Report.State "reported")}}
-          <button class="btn btn-sm btn-primary"
-                  hx-post="/api/incidents/{{.Report.ID}}/acknowledge"
-                  hx-target="#action-bar"
-                  hx-swap="outerHTML"
-                  hx-indicator=".action-spinner">
-            👤 Acknowledge
-          </button>
-          {{end}}
-          {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
-          <button class="btn btn-sm btn-success"
-                  hx-post="/reports/{{.Report.ID}}/resolve"
-                  hx-target="#action-bar"
-                  hx-swap="outerHTML"
-                  hx-confirm="Resolve this incident?">
-            ✓ Resolve
-          </button>
-          {{end}}
-          {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
-          <button class="btn btn-sm btn-warning btn-outline"
-                  hx-post="/api/incidents/{{.Report.ID}}/escalate"
-                  hx-vals='{"level":"2","target":""}'
-                  hx-target="#action-bar"
-                  hx-swap="outerHTML"
-                  hx-confirm="Escalate this incident to L2?">
-            ⬆ Escalate
-          </button>
-          {{end}}
-          <span class="loading loading-spinner loading-xs action-spinner htmx-indicator"></span>
-        </div>
-      </div>
-    </div>
-  </div>
+  {{/* Action Bar — rendered from partial for htmx swap compatibility */}}
+  {{template "action-bar" .}}
 
   {{/* Two-column layout: Understand (left) + Act (right) */}}
   <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">

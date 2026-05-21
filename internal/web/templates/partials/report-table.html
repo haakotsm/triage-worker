@@ -50,7 +50,7 @@
               hx-include="[name='search'],[name='severity'],[name='status'],[name='limit']">
             Status {{sortIndicator "status" .Sort .Dir}}
           </th>
-          <th>Owner</th>
+          <th class="hidden lg:table-cell">Owner</th>
         </tr>
       </thead>
       <tbody>
@@ -76,7 +76,7 @@
             <span class="badge badge-warning badge-xs ml-1" title="Escalated: {{.EscalationLevel}}">⬆{{.EscalationLevel}}</span>
             {{end}}
           </td>
-          <td class="text-sm">
+          <td class="text-sm hidden lg:table-cell">
             {{if .AssignedTo}}<span class="font-mono text-xs">{{.AssignedTo}}</span>{{else}}<span class="text-base-content/30">—</span>{{end}}
           </td>
         </tr>
