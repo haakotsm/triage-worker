@@ -27,8 +27,8 @@
     if (window.Alpine && elt) {
       Alpine.initTree(elt);
     }
-    // Only restore focus for main-content swaps (not action-bar or timeline)
-    if (elt && elt.id === "main-content") {
+    // Only restore focus for main-content or detail-container swaps
+    if (elt && (elt.id === "main-content" || elt.id === "detail-container")) {
       var focusable = elt.querySelector(
         'button:not([disabled]), a[href], input:not([disabled]), [tabindex="0"]'
       );

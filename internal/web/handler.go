@@ -352,7 +352,7 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isHTMX(r) {
-		h.render(w, "report-detail", data)
+		h.render(w, "detail-content", data)
 	} else {
 		h.render(w, "detail", data)
 	}
