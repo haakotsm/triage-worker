@@ -246,6 +246,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/reports/") && strings.HasSuffix(r.URL.Path, "/resolve"):
 		h.handleResolve(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
+		// Legacy URL — redirect to /incidents/:id
+		id := strings.TrimPrefix(r.URL.Path, "/reports/")
+		http.Redirect(w, r, "/incidents/"+id, http.StatusMovedPermanently)
+	case strings.HasPrefix(r.URL.Path, "/incidents/") && strings.HasSuffix(r.URL.Path, "/resolve"):
+		h.handleResolve(w, r)
+	case strings.HasPrefix(r.URL.Path, "/incidents/"):
 		h.handleDetail(w, r)
 	default:
 		http.NotFound(w, r)
@@ -292,7 +298,7 @@ func (h *Handler) handlePartialStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/reports/")
+	idStr := strings.TrimPrefix(r.URL.Path, "/incidents/")
 	if idStr == "" {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
@@ -983,18 +989,20 @@ func (h *Handler) handlePartialIncidents(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// handleResolve processes POST /reports/:id/resolve to mark a report as resolved.
+// handleResolve processes POST /incidents/:id/resolve to mark an incident as resolved.
 func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Extract report ID: /reports/<id>/resolve
-	path := strings.TrimPrefix(r.URL.Path, "/reports/")
+	// Extract incident ID: /incidents/<id>/resolve or legacy /reports/<id>/resolve
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/incidents/")
+	path = strings.TrimPrefix(path, "/reports/")
 	idStr := strings.TrimSuffix(path, "/resolve")
 	if idStr == "" {
-		http.Error(w, "Missing report ID", http.StatusBadRequest)
+		http.Error(w, "Missing incident ID", http.StatusBadRequest)
 		return
 	}
 
@@ -1069,8 +1077,8 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Non-htmx: redirect back to report detail.
-	http.Redirect(w, r, "/reports/"+idStr, http.StatusSeeOther)
+	// Non-htmx: redirect back to incident detail.
+	http.Redirect(w, r, "/incidents/"+idStr, http.StatusSeeOther)
 }
 
 // handleRetriage triggers a re-triage workflow for an existing incident.

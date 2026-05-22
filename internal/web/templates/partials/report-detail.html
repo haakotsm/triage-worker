@@ -4,7 +4,7 @@
   <div class="breadcrumbs text-sm">
     <ul>
       <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
-      <li>Report #{{.Report.ID}}</li>
+      <li>Incident #{{.Report.ID}}</li>
     </ul>
   </div>
 
@@ -20,17 +20,9 @@
           <p class="text-sm text-base-content/60 mt-1">
             Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
             · Alert: {{.Report.AlertName}}
-            · {{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}} blast radius
           </p>
         </div>
         <div class="flex items-center gap-3">
-          <div class="radial-progress text-primary text-xs"
-               style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:3px;"
-               role="progressbar" aria-valuemin="0" aria-valuemax="100"
-               aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
-               aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
-            {{printf "%.0f" .Report.Confidence}}%
-          </div>
           <span class="badge {{incidentStateClass .Report.State}} gap-1">
             {{stateIcon .Report.State}} {{stateLabel .Report.State}}
           </span>
@@ -40,6 +32,64 @@
           {{if .Report.EscalationLevel}}
           <span class="badge badge-warning badge-sm gap-1">⬆ {{.Report.EscalationLevel}}</span>
           {{end}}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {{/* Workflow Progress Stepper */}}
+  <div class="card bg-base-100 shadow">
+    <div class="card-body py-3">
+      <ul class="steps steps-horizontal w-full text-xs">
+        <li class="step step-primary" data-content="⚙">
+          <span class="mt-1">Processing</span>
+        </li>
+        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="📋">
+          <span class="mt-1">Reported</span>
+        </li>
+        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="👤">
+          <span class="mt-1">Acknowledged</span>
+        </li>
+        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" data-content="✓">
+          <span class="mt-1">Resolved</span>
+        </li>
+      </ul>
+      {{if eq .Report.State "processing"}}
+      <p class="text-xs text-center text-base-content/50 mt-2">
+        Temporal workflow running: correlating alerts → enriching context → AI triage agent
+      </p>
+      {{end}}
+    </div>
+  </div>
+
+  {{/* Context: Blast Radius + Classification + Confidence */}}
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div class="card bg-base-100 shadow-sm">
+      <div class="card-body py-3 px-4">
+        <div class="text-xs uppercase text-base-content/50 font-semibold">Blast Radius</div>
+        <div class="text-lg font-bold mt-1">{{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}}</div>
+      </div>
+    </div>
+    {{if .Report.Classification}}
+    <div class="card bg-base-100 shadow-sm">
+      <div class="card-body py-3 px-4">
+        <div class="text-xs uppercase text-base-content/50 font-semibold">Classification</div>
+        <div class="text-lg font-bold mt-1">{{.Report.Classification}}</div>
+      </div>
+    </div>
+    {{end}}
+    <div class="card bg-base-100 shadow-sm">
+      <div class="card-body py-3 px-4">
+        <div class="text-xs uppercase text-base-content/50 font-semibold">Confidence</div>
+        <div class="flex items-center gap-2 mt-1">
+          <div class="radial-progress text-primary text-xs"
+               style="--value:{{printf "%.0f" .Report.Confidence}};--size:2.5rem;--thickness:3px;"
+               role="progressbar" aria-valuemin="0" aria-valuemax="100"
+               aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
+               aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
+            {{printf "%.0f" .Report.Confidence}}%
+          </div>
+          <span class="text-lg font-bold">{{printf "%.0f" .Report.Confidence}}%</span>
         </div>
       </div>
     </div>

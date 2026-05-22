@@ -51,7 +51,7 @@
            class="absolute right-0 top-full mt-2 z-10 card bg-base-200 shadow-lg border border-base-300 w-80 max-w-[calc(100vw-2rem)]">
         <div class="card-body p-4">
           <h4 class="font-semibold text-sm mb-2">Resolve Incident</h4>
-          <form hx-post="/reports/{{.Report.ID}}/resolve"
+          <form hx-post="/incidents/{{.Report.ID}}/resolve"
                 hx-target="#action-bar"
                 hx-swap="outerHTML"
                 hx-headers='{"Content-Type": "application/json"}'
