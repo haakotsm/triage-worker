@@ -1,0 +1,9 @@
+{{define "detail-content"}}
+<div id="detail-container"
+     {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}
+     {{if isProcessing .Report.State}}
+     hx-get="/incidents/{{.Report.ID}}" hx-trigger="every 5s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace" hx-indicator="#page-loader"
+     {{end}}>
+  {{template "report-detail" .}}
+</div>
+{{end}}
