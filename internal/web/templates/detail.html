@@ -5,5 +5,11 @@
 {{define "page-title"}}Incident #{{.Report.ID}} — {{.Report.Kind}}/{{.Report.Workload}} — Triage Dashboard{{end}}
 
 {{define "content"}}
-{{template "report-detail" .}}
+<div id="detail-container"
+     {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}
+     {{if isProcessing .Report.State}}
+     hx-get="/incidents/{{.Report.ID}}" hx-trigger="every 5s" hx-target="#main-content" hx-select="#detail-container" hx-swap="outerHTML" hx-indicator="#page-loader"
+     {{end}}>
+  {{template "report-detail" .}}
+</div>
 {{end}}

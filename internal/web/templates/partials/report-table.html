@@ -58,6 +58,7 @@
         <tr class="hover cursor-pointer" tabindex="0"
             aria-label="View incident: {{.AlertName}} on {{.Workload}}"
             hx-get="/incidents/{{.ID}}" hx-target="#main-content" hx-push-url="true"
+            hx-indicator="#page-loader"
             hx-trigger="click, keyup[key=='Enter']">
           <td><span class="badge {{severityClass .Severity}} badge-sm">{{.Severity}}</span></td>
           <td class="font-mono text-sm">{{.Workload}}</td>

@@ -3,7 +3,7 @@
   {{/* Breadcrumbs */}}
   <nav aria-label="Breadcrumb" class="breadcrumbs text-sm">
     <ol>
-      <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
+      <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true" hx-indicator="#page-loader">Dashboard</a></li>
       <li aria-current="page">Incident #{{.Report.ID}}</li>
     </ol>
   </nav>
@@ -54,13 +54,79 @@
           <span class="mt-1">Resolved</span>
         </li>
       </ol>
-      {{if eq .Report.State "processing"}}
+      {{if isProcessing .Report.State}}
       <p class="text-xs text-center text-base-content/50 mt-2">
         Temporal workflow running: correlating alerts → enriching context → AI triage agent
       </p>
       {{end}}
     </div>
   </nav>
+
+  {{/* ═══ STATE-ADAPTIVE CONTENT ═══ */}}
+  {{if isProcessing .Report.State}}
+  {{/* ── PROCESSING STATE: skeleton + progress ── */}}
+  <div class="card bg-base-100 shadow border-l-4 border-info">
+    <div class="card-body text-center py-8">
+      <div class="flex flex-col items-center gap-4">
+        <span class="loading loading-spinner loading-lg text-primary"></span>
+        <div>
+          <h2 class="font-semibold text-lg">Diagnosis in Progress</h2>
+          <p class="text-sm text-base-content/60 mt-1">
+            The AI triage agent is analyzing this incident. Results will appear automatically.
+          </p>
+        </div>
+        <div class="flex gap-2 text-xs text-base-content/50">
+          <span>Alert: <span class="font-mono">{{.Report.AlertName}}</span></span>
+          <span>· Started {{timeAgo .Report.CreatedAt}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {{/* Skeleton placeholders for upcoming content */}}
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3" aria-hidden="true">
+    <div class="card bg-base-100 shadow-sm">
+      <div class="card-body py-3 px-4">
+        <div class="skeleton h-3 w-20 mb-2"></div>
+        <div class="skeleton h-6 w-32"></div>
+      </div>
+    </div>
+    <div class="card bg-base-100 shadow-sm">
+      <div class="card-body py-3 px-4">
+        <div class="skeleton h-3 w-24 mb-2"></div>
+        <div class="skeleton h-6 w-28"></div>
+      </div>
+    </div>
+    <div class="card bg-base-100 shadow-sm">
+      <div class="card-body py-3 px-4">
+        <div class="skeleton h-3 w-20 mb-2"></div>
+        <div class="skeleton h-6 w-16"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow" aria-hidden="true">
+    <div class="card-body">
+      <div class="skeleton h-4 w-32 mb-3"></div>
+      <div class="skeleton h-3 w-full mb-2"></div>
+      <div class="skeleton h-3 w-4/5 mb-2"></div>
+      <div class="skeleton h-3 w-3/5"></div>
+    </div>
+  </div>
+
+  {{else}}
+  {{/* ── REPORTED / ACKNOWLEDGED / RESOLVED STATE: full content ── */}}
+
+  {{/* Low-confidence warning */}}
+  {{if ltf .Report.Confidence 30.0}}
+  <div class="alert alert-warning shadow" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+    <div>
+      <span class="font-semibold">Low Confidence ({{printf "%.0f" .Report.Confidence}}%)</span>
+      <span class="text-sm"> — Verify evidence manually before acting on this diagnosis.</span>
+    </div>
+  </div>
+  {{end}}
 
   {{/* Context: Blast Radius + Classification + Confidence */}}
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -235,5 +301,6 @@
       {{template "timeline" .}}
     </div>
   </div>
+  {{end}}{{/* end state-adaptive */}}
 </div>
 {{end}}
