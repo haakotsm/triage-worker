@@ -20,21 +20,23 @@
   });
 
   // --- Alpine re-initialization after htmx swaps ---
-  // Ensures Alpine directives in swapped-in HTML fragments are initialized.
+  // Alpine's MutationObserver handles most cases, but explicit initTree
+  // ensures deterministic initialization for outerHTML swaps.
   document.addEventListener("htmx:afterSwap", function (evt) {
-    if (window.Alpine) {
-      Alpine.initTree(evt.detail.target);
+    var elt = evt.detail.elt;
+    if (window.Alpine && elt) {
+      Alpine.initTree(elt);
     }
-    // Restore focus to first interactive element in swapped content
-    var target = evt.detail.target;
-    var focusable = target.querySelector(
-      'button:not([disabled]), a[href], input:not([disabled]), [tabindex="0"]'
-    );
-    if (focusable) {
-      focusable.focus();
+    // Only restore focus for main-content swaps (not action-bar or timeline)
+    if (elt && elt.id === "main-content") {
+      var focusable = elt.querySelector(
+        'button:not([disabled]), a[href], input:not([disabled]), [tabindex="0"]'
+      );
+      if (focusable) {
+        focusable.focus();
+      }
+      announce("Content updated");
     }
-    // Announce content update to screen readers
-    announce("Content updated");
   });
 
   // --- Screen reader announcements ---

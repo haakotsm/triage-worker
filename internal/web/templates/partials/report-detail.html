@@ -115,7 +115,7 @@
         <button class="btn btn-sm btn-primary"
                 aria-label="Copy all diagnostic commands to clipboard"
                 @click="
-                  const cmds = [...this.closest('[x-data]').querySelectorAll('[data-l1-cmd]')]
+                  const cmds = [...$el.closest('[x-data]').querySelectorAll('[data-l1-cmd]')]
                     .map(el => el.textContent.trim()).join('\n');
                   navigator.clipboard.writeText(cmds).then(() => {
                     copied = true;
