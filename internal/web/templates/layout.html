@@ -6,21 +6,17 @@
   <title>Triage Dashboard</title>
   <link rel="stylesheet" href="/static/output.css">
   <style>[x-cloak] { display: none !important; }</style>
-  <script>
-    document.documentElement.setAttribute('data-theme',
-      localStorage.getItem('theme') || 'luxury');
-  </script>
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/json-enc.js" defer></script>
   <script src="/static/sse.js" defer></script>
-  <script src="/static/morph.js" defer></script>
   <script src="/static/alpine.min.js" defer></script>
+  <script src="/static/init.js" defer></script>
   <style>
     .htmx-indicator { opacity: 0; transition: opacity 200ms ease-in; }
     .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
   </style>
 </head>
-<body class="min-h-screen bg-base-200" hx-headers='js:{"X-CSRF-Token": document.cookie.match(/_csrf=([^;]+)/)?.[1] || ""}'>
+<body class="min-h-screen bg-base-200">
   <div class="navbar bg-base-100 shadow-lg">
     <div class="flex-1">
       <a href="/" class="btn btn-ghost text-xl">🔍 Triage Dashboard</a>
@@ -42,23 +38,5 @@
     {{template "content" .}}
   </main>
   <div id="toast-container" class="toast toast-top toast-end z-50"></div>
-  <script>
-    document.addEventListener('htmx:responseError', function(evt) {
-      var msg = 'Request failed (status ' + evt.detail.xhr.status + ')';
-      showToast(msg, 'alert-error');
-    });
-    document.addEventListener('htmx:sendError', function() {
-      showToast('Network error — check your connection', 'alert-warning');
-    });
-    function showToast(msg, cls) {
-      var el = document.createElement('div');
-      el.className = 'alert ' + cls + ' shadow-lg text-sm';
-      var span = document.createElement('span');
-      span.textContent = msg;
-      el.appendChild(span);
-      document.getElementById('toast-container').appendChild(el);
-      setTimeout(function() { el.remove(); }, 5000);
-    }
-  </script>
 </body>
 </html>{{end}}

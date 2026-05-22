@@ -1013,7 +1013,10 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if mediaType == "application/json" {
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				h.logger.Warn("handleResolve: malformed JSON body, using defaults",
+					"report_id", id, "error", err)
+			}
 		}
 	}
 	switch body.Source {

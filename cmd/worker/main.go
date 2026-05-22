@@ -165,7 +165,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 		devMode := os.Getenv("DEV_MODE") == "true"
 		authMW := web.NewAuthMiddleware(logger, devMode)
-		webHandler = authMW.Wrap(wh)
+		csrfMW := web.NewCSRFMiddleware(logger)
+		webHandler = authMW.Wrap(csrfMW.Wrap(wh))
 		logger.Info("web dashboard enabled", "dev_mode", devMode)
 	}
 	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, webHandler, db)
