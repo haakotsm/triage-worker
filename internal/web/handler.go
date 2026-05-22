@@ -142,6 +142,7 @@ type DetailData struct {
 	AgentRecs  []Recommendation
 	Notes      []Note
 	Timeline   []TimelineEntry
+	SSEEnabled bool
 }
 
 // Handler serves the web dashboard and static assets.
@@ -347,10 +348,11 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 		AgentRecs:  agent,
 		Notes:      notes,
 		Timeline:   timeline,
+		SSEEnabled: h.sse != nil,
 	}
 
 	if isHTMX(r) {
-		h.render(w, "report-detail", data)
+		h.render(w, "detail-content", data)
 	} else {
 		h.render(w, "detail", data)
 	}
@@ -925,6 +927,16 @@ func templateFuncs() template.FuncMap {
 		},
 		"formatDate": func(t time.Time) string {
 			return t.Format("Jan 2, 15:04")
+		},
+		"isProcessing": func(state string) bool {
+			switch state {
+			case "processing", "correlating", "enriching", "triaging":
+				return true
+			}
+			return false
+		},
+		"ltf": func(a float64, b float64) bool {
+			return a < b
 		},
 		"timelineTypeClass": func(typ string) string {
 			switch typ {
