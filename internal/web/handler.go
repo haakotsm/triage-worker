@@ -219,7 +219,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+		"default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "+
 			"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
 
 	switch {
@@ -313,6 +313,12 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 	if report == nil {
 		http.NotFound(w, r)
 		return
+	}
+
+	// Normalize confidence to 0-100 scale for template rendering.
+	// Some AI agents return 0.0-1.0 (fraction) rather than 0-100.
+	if report.Confidence > 0 && report.Confidence <= 1.0 {
+		report.Confidence *= 100
 	}
 
 	var l1 []Recommendation

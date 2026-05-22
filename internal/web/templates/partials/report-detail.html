@@ -1,22 +1,22 @@
 {{define "report-detail"}}
 <div class="flex flex-col gap-4">
   {{/* Breadcrumbs */}}
-  <div class="breadcrumbs text-sm">
-    <ul>
+  <nav aria-label="Breadcrumb" class="breadcrumbs text-sm">
+    <ol>
       <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
-      <li>Incident #{{.Report.ID}}</li>
-    </ul>
-  </div>
+      <li aria-current="page">Incident #{{.Report.ID}}</li>
+    </ol>
+  </nav>
 
   {{/* Header */}}
   <div class="card bg-base-100 shadow">
     <div class="card-body">
       <div class="flex justify-between items-start flex-wrap gap-2">
         <div>
-          <h2 class="card-title text-lg font-mono">
+          <h1 class="card-title text-lg font-mono">
             {{.Report.Kind}}/{{.Report.Workload}}
             <span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>
-          </h2>
+          </h1>
           <p class="text-sm text-base-content/60 mt-1">
             Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
             · Alert: {{.Report.AlertName}}
@@ -38,29 +38,29 @@
   </div>
 
   {{/* Workflow Progress Stepper */}}
-  <div class="card bg-base-100 shadow">
+  <nav aria-label="Incident workflow progress" class="card bg-base-100 shadow">
     <div class="card-body py-3">
-      <ul class="steps steps-horizontal w-full text-xs">
-        <li class="step step-primary" data-content="⚙">
+      <ol class="steps steps-horizontal w-full text-xs">
+        <li class="step step-primary" data-content="⚙" aria-current="step">
           <span class="mt-1">Processing</span>
         </li>
-        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="📋">
+        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="📋" {{if eq .Report.State "reported"}}aria-current="step"{{end}}>
           <span class="mt-1">Reported</span>
         </li>
-        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="👤">
+        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="👤" {{if eq .Report.State "acknowledged"}}aria-current="step"{{end}}>
           <span class="mt-1">Acknowledged</span>
         </li>
-        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" data-content="✓">
+        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" data-content="✓" {{if eq .Report.State "resolved"}}aria-current="step"{{end}}>
           <span class="mt-1">Resolved</span>
         </li>
-      </ul>
+      </ol>
       {{if eq .Report.State "processing"}}
       <p class="text-xs text-center text-base-content/50 mt-2">
         Temporal workflow running: correlating alerts → enriching context → AI triage agent
       </p>
       {{end}}
     </div>
-  </div>
+  </nav>
 
   {{/* Context: Blast Radius + Classification + Confidence */}}
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -98,32 +98,70 @@
   {{/* Action Bar — rendered from partial for htmx swap compatibility */}}
   {{template "action-bar" .}}
 
-  {{/* Two-column layout: Understand (left) + Act (right) */}}
+  {{/* Primary diagnosis — full width */}}
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="font-semibold">Root Cause</h2>
+      <p class="text-base-content/90 leading-relaxed">{{.Report.RootCause}}</p>
+    </div>
+  </div>
+
+  {{/* L1 Diagnostic Commands — full width, immediately after diagnosis */}}
+  {{if .L1Commands}}
+  <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="{ copied: false }">
+    <div class="card-body">
+      <div class="flex justify-between items-center">
+        <h2 class="font-semibold">L1 Diagnostic Commands</h2>
+        <button class="btn btn-sm btn-primary"
+                aria-label="Copy all diagnostic commands to clipboard"
+                @click="
+                  const cmds = [...$el.closest('[x-data]').querySelectorAll('[data-l1-cmd]')]
+                    .map(el => el.textContent.trim()).join('\n');
+                  navigator.clipboard.writeText(cmds).then(() => {
+                    copied = true;
+                    if(window.__announce) window.__announce('All commands copied to clipboard');
+                    setTimeout(() => copied = false, 2000);
+                  });
+                ">
+          <span x-show="!copied" aria-hidden="true">📋</span>
+          <span x-show="!copied"> Copy All</span>
+          <span x-show="copied" x-cloak aria-hidden="true">✅</span>
+          <span x-show="copied" x-cloak> Copied!</span>
+        </button>
+      </div>
+      <div class="flex flex-col gap-2 mt-2">
+        {{range .L1Commands}}
+        <div class="bg-base-200 rounded-lg p-3" x-data="{ cmdCopied: false }">
+          <div class="flex justify-between items-start gap-2">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm mb-1">{{.Action}}</p>
+              <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-l1-cmd>{{.Command}}</code>
+              {{if .Expected}}
+              <p class="text-xs text-base-content/60 mt-1">→ Expected: {{.Expected}}</p>
+              {{end}}
+            </div>
+            <button class="btn btn-xs btn-ghost"
+                    aria-label="Copy command: {{.Action}}"
+                    @click="navigator.clipboard.writeText($el.closest('[x-data]').querySelector('[data-l1-cmd]').textContent.trim()).then(() => { cmdCopied = true; if(window.__announce) window.__announce('Command copied'); setTimeout(() => cmdCopied = false, 1500); })">
+              <span x-show="!cmdCopied" aria-hidden="true">📋</span>
+              <span x-show="cmdCopied" x-cloak aria-hidden="true">✅</span>
+            </button>
+          </div>
+        </div>
+        {{end}}
+      </div>
+    </div>
+  </div>
+  {{end}}
+
+  {{/* Two-column layout: Supporting detail (left) + Timeline (right) */}}
   <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
-    {{/* Left column: Understanding — 3 of 5 columns */}}
-    <div class="lg:col-span-3 flex flex-col gap-4">
-      {{/* Summary */}}
-      {{if .Report.Summary}}
-      <div class="card bg-base-100 shadow">
-        <div class="card-body">
-          <h3 class="font-semibold">Summary</h3>
-          <p class="break-words">{{.Report.Summary}}</p>
-        </div>
-      </div>
-      {{end}}
-
-      {{/* Root Cause */}}
-      <div class="card bg-base-100 shadow">
-        <div class="card-body">
-          <h3 class="font-semibold">Root Cause</h3>
-          <p>{{.Report.RootCause}}</p>
-        </div>
-      </div>
-
+    {{/* Left column: Supporting detail — 3 of 5 columns */}}
+    <div class="lg:col-span-3 lg:order-1 order-2 flex flex-col gap-4">
       {{/* Causal Chain */}}
       {{if gt (len .Report.CausalChain) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow" open>
+      <details class="collapse collapse-arrow bg-base-100 shadow">
         <summary class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</summary>
         <div class="collapse-content">
           <ul class="steps steps-vertical">
@@ -137,10 +175,10 @@
 
       {{/* Evidence */}}
       {{if gt (len .Report.Evidence) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow" open>
+      <details class="collapse collapse-arrow bg-base-100 shadow">
         <summary class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</summary>
         <div class="collapse-content">
-          <div class="overflow-x-auto">
+          <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Evidence table, scrollable">
             <table class="table table-sm">
               <thead>
                 <tr>
@@ -163,55 +201,10 @@
         </div>
       </details>
       {{end}}
-    </div>
-
-    {{/* Right column: Actions — 2 of 5 columns */}}
-    <div class="lg:col-span-2 flex flex-col gap-4">
-      {{/* L1 Diagnostic Commands */}}
-      {{if .L1Commands}}
-      <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="{ copied: false }">
-        <div class="card-body">
-          <div class="flex justify-between items-center">
-            <h3 class="font-semibold">L1 Diagnostic Commands</h3>
-            <button class="btn btn-sm btn-primary"
-                    @click="
-                      const cmds = [...document.querySelectorAll('[data-l1-cmd]')]
-                        .map(el => el.textContent.trim()).join('\n');
-                      navigator.clipboard.writeText(cmds);
-                      copied = true;
-                      setTimeout(() => copied = false, 2000);
-                    ">
-              <span x-show="!copied">📋 Copy All</span>
-              <span x-show="copied" x-cloak>✅ Copied!</span>
-            </button>
-          </div>
-          <div class="flex flex-col gap-2 mt-2">
-            {{range .L1Commands}}
-            <div class="bg-base-200 rounded-lg p-3" x-data="{ cmdCopied: false }">
-              <div class="flex justify-between items-start gap-2">
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm mb-1">{{.Action}}</p>
-                  <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-l1-cmd>{{.Command}}</code>
-                  {{if .Expected}}
-                  <p class="text-xs text-base-content/60 mt-1">→ Expected: {{.Expected}}</p>
-                  {{end}}
-                </div>
-                <button class="btn btn-xs btn-ghost"
-                        @click="navigator.clipboard.writeText($el.closest('[x-data]').querySelector('[data-l1-cmd]').textContent.trim()); cmdCopied = true; setTimeout(() => cmdCopied = false, 1500)">
-                  <span x-show="!cmdCopied">📋</span>
-                  <span x-show="cmdCopied" x-cloak>✅</span>
-                </button>
-              </div>
-            </div>
-            {{end}}
-          </div>
-        </div>
-      </div>
-      {{end}}
 
       {{/* Agent Recommendations */}}
       {{if .AgentRecs}}
-      <details class="collapse collapse-arrow bg-base-100 shadow" open>
+      <details class="collapse collapse-arrow bg-base-100 shadow">
         <summary class="collapse-title font-semibold">
           Agent Recommendations ({{len .AgentRecs}})
         </summary>
@@ -234,7 +227,10 @@
         </div>
       </details>
       {{end}}
+    </div>
 
+    {{/* Right column: Timeline — 2 of 5 columns, appears first on mobile */}}
+    <div class="lg:col-span-2 lg:order-2 order-1 flex flex-col gap-4">
       {{/* Timeline & Notes */}}
       {{template "timeline" .}}
     </div>

@@ -2,6 +2,8 @@
 {{template "layout" .}}
 {{end}}
 
+{{define "page-title"}}Incident #{{.Report.ID}} — {{.Report.Kind}}/{{.Report.Workload}} — Triage Dashboard{{end}}
+
 {{define "content"}}
 {{template "report-detail" .}}
 {{end}}
