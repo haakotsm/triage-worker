@@ -84,6 +84,30 @@ func TestTemplateFunctions(t *testing.T) {
 	}
 }
 
+func TestAwaitingDiagnosis(t *testing.T) {
+	fn := templateFuncs()["awaitingDiagnosis"].(func(Report) bool)
+
+	tests := []struct {
+		name string
+		r    Report
+		want bool
+	}{
+		{"processing no data", Report{State: "processing", RootCause: ""}, true},
+		{"correlating no data", Report{State: "correlating", RootCause: ""}, true},
+		{"processing with data", Report{State: "processing", RootCause: "OOM killed"}, false},
+		{"reported", Report{State: "reported", RootCause: "OOM killed"}, false},
+		{"reported no data", Report{State: "reported", RootCause: ""}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fn(tt.r); got != tt.want {
+				t.Errorf("awaitingDiagnosis(%+v) = %v, want %v", tt.r, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUnknownPath_Returns404(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {

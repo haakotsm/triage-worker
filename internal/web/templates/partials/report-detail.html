@@ -54,7 +54,7 @@
           <span class="mt-1">Resolved</span>
         </li>
       </ol>
-      {{if isProcessing .Report.State}}
+      {{if awaitingDiagnosis .Report}}
       <p class="text-xs text-center text-base-content/50 mt-2">
         Temporal workflow running: correlating alerts → enriching context → AI triage agent
       </p>
@@ -63,7 +63,7 @@
   </nav>
 
   {{/* ═══ STATE-ADAPTIVE CONTENT ═══ */}}
-  {{if isProcessing .Report.State}}
+  {{if awaitingDiagnosis .Report}}
   {{/* ── PROCESSING STATE: skeleton + progress ── */}}
   <div class="card bg-base-100 shadow border-l-4 border-info">
     <div class="card-body text-center py-8">
