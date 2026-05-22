@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Triage Dashboard</title>
+  <title>{{block "page-title" .}}Triage Dashboard{{end}}</title>
   <link rel="stylesheet" href="/static/output.css">
   <style>[x-cloak] { display: none !important; }</style>
   <script src="/static/htmx.min.js" defer></script>
@@ -17,7 +17,12 @@
   </style>
 </head>
 <body class="min-h-screen bg-base-200">
-  <div class="navbar bg-base-100 shadow-lg">
+  <a href="#main-content"
+     class="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:bg-primary focus:text-primary-content focus:p-3 focus:rounded-lg focus:text-sm focus:font-semibold">
+    Skip to main content
+  </a>
+  <div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <header class="navbar bg-base-100 shadow-lg" role="banner">
     <div class="flex-1">
       <a href="/" class="btn btn-ghost text-xl">🔍 Triage Dashboard</a>
     </div>
@@ -33,7 +38,7 @@
         <span class="swap-off">☀️</span>
       </label>
     </div>
-  </div>
+  </header>
   <main class="container mx-auto px-4 py-6" id="main-content">
     {{template "content" .}}
   </main>

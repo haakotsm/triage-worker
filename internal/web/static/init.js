@@ -1,5 +1,5 @@
 // init.js — Runs after htmx loads. Handles theme restoration, CSRF token
-// injection, and error toast notifications.
+// injection, error toast notifications, and Alpine/htmx interop.
 
 (function () {
   "use strict";
@@ -18,6 +18,37 @@
       evt.detail.headers["X-CSRF-Token"] = match[1];
     }
   });
+
+  // --- Alpine re-initialization after htmx swaps ---
+  // Ensures Alpine directives in swapped-in HTML fragments are initialized.
+  document.addEventListener("htmx:afterSwap", function (evt) {
+    if (window.Alpine) {
+      Alpine.initTree(evt.detail.target);
+    }
+    // Restore focus to first interactive element in swapped content
+    var target = evt.detail.target;
+    var focusable = target.querySelector(
+      'button:not([disabled]), a[href], input:not([disabled]), [tabindex="0"]'
+    );
+    if (focusable) {
+      focusable.focus();
+    }
+    // Announce content update to screen readers
+    announce("Content updated");
+  });
+
+  // --- Screen reader announcements ---
+  function announce(message) {
+    var el = document.getElementById("sr-announcer");
+    if (!el) return;
+    el.textContent = "";
+    requestAnimationFrame(function () {
+      el.textContent = message;
+    });
+  }
+
+  // Expose for use by inline handlers (e.g., copy buttons)
+  window.__announce = announce;
 
   // --- Error toasts ---
   function showToast(msg, cls) {
