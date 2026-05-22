@@ -935,6 +935,15 @@ func templateFuncs() template.FuncMap {
 			}
 			return false
 		},
+		"awaitingDiagnosis": func(r Report) bool {
+			// True only when state is processing AND no diagnostic data yet.
+			// If workflow wrote data but failed to update state, show the data.
+			switch r.State {
+			case "processing", "correlating", "enriching", "triaging":
+				return r.RootCause == ""
+			}
+			return false
+		},
 		"ltf": func(a float64, b float64) bool {
 			return a < b
 		},
