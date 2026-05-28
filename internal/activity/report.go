@@ -63,10 +63,13 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 			recommendations = EXCLUDED.recommendations,
 			confidence = EXCLUDED.confidence,
 			escalation_needed = EXCLUDED.escalation_needed,
+			alert_count = EXCLUDED.alert_count,
 			completed_at = EXCLUDED.completed_at,
 			summary = EXCLUDED.summary,
 			blast_radius = EXCLUDED.blast_radius,
-			state = 'reported'
+			state = 'reported',
+			resolved_at = NULL
+		WHERE triage.reports.state != 'resolved'
 	`
 
 	_, err = r.DB.ExecContext(ctx, query,

@@ -42,7 +42,15 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	stateCtx := workflow.WithActivityOptions(ctx, stateOpts)
 
 	// --- Step 1: Correlate alerts ---
-	alerts, err := correlateAlerts(ctx)
+	debounceWindow := CorrelationDebounce
+	if params.CorrelationDebounce > 0 {
+		debounceWindow = params.CorrelationDebounce
+	}
+	hardCap := CorrelationHardCap
+	if params.CorrelationHardCap > 0 {
+		hardCap = params.CorrelationHardCap
+	}
+	alerts, err := correlateAlerts(ctx, debounceWindow, hardCap)
 	if err != nil {
 		return types.TriageResult{}, err
 	}
@@ -104,10 +112,11 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 
 	agentOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 300 * time.Second,
+		HeartbeatTimeout:    30 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    5 * time.Second,
 			BackoffCoefficient: 2.0,
-			MaximumAttempts:    5,
+			MaximumAttempts:    3,
 			NonRetryableErrorTypes: []string{
 				"AuthError",
 				"ClientError",
@@ -121,6 +130,9 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	err = workflow.ExecuteActivity(agentCtx, agentAct.InvokeTriageAgent, alerts, enrichment).Get(ctx, &report)
 	if err != nil {
 		logger.Error("agent invocation failed", "error", err)
+		// Transition DB state to "failed" so the row isn't stuck in "triaging".
+		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+			workflow.GetInfo(ctx).WorkflowExecution.ID, "failed", "").Get(ctx, nil)
 		return types.TriageResult{}, err
 	}
 
@@ -179,11 +191,11 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 
 // correlateAlerts collects alerts from the signal channel with a debounce window.
 // First alert arrives via SignalWithStart. Subsequent alerts arrive as signals.
-func correlateAlerts(ctx workflow.Context) ([]types.Alert, error) {
+func correlateAlerts(ctx workflow.Context, debounceWindow, hardCap time.Duration) ([]types.Alert, error) {
 	alertCh := workflow.GetSignalChannel(ctx, AlertSignalName)
 	alerts := make([]types.Alert, 0, 8)
 	seen := make(map[string]bool)
-	deadline := workflow.Now(ctx).Add(CorrelationHardCap)
+	deadline := workflow.Now(ctx).Add(hardCap)
 
 	for {
 		remaining := deadline.Sub(workflow.Now(ctx))
@@ -191,7 +203,7 @@ func correlateAlerts(ctx workflow.Context) ([]types.Alert, error) {
 			break
 		}
 
-		debounce := CorrelationDebounce
+		debounce := debounceWindow
 		if debounce > remaining {
 			debounce = remaining
 		}

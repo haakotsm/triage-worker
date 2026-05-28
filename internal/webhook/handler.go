@@ -24,35 +24,39 @@ const maxBodySize = 1 << 20 // 1 MB
 
 // Handler handles Alertmanager webhook requests and starts/signals Temporal workflows.
 type Handler struct {
-	temporalClient client.Client
-	taskQueue      string
-	logger         *slog.Logger
-	healthy        *atomic.Bool
-	webhookSecret  string
-	apiHandler     http.Handler
-	webHandler     http.Handler
-	db             *sql.DB
+	temporalClient      client.Client
+	taskQueue           string
+	logger              *slog.Logger
+	healthy             *atomic.Bool
+	webhookSecret       string
+	apiHandler          http.Handler
+	webHandler          http.Handler
+	db                  *sql.DB
+	correlationDebounce time.Duration
+	correlationHardCap  time.Duration
 }
 
 // NewHandler creates a new webhook handler.
 // If webhookSecret is non-empty, Bearer token authentication is required on /webhook.
 // If apiHandler is non-nil, requests to /api/ are delegated to it.
 // If db is non-nil, resolved alerts will update resolved_at on matching reports.
-func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string, apiHandler http.Handler, webHandler http.Handler, db *sql.DB) *Handler {
+func NewHandler(tc client.Client, taskQueue string, logger *slog.Logger, webhookSecret string, apiHandler http.Handler, webHandler http.Handler, db *sql.DB, correlationDebounce, correlationHardCap time.Duration) *Handler {
 	healthy := &atomic.Bool{}
 	healthy.Store(true)
 	if webhookSecret == "" {
 		logger.Warn("WEBHOOK_SECRET not set — webhook endpoint is unauthenticated")
 	}
 	return &Handler{
-		temporalClient: tc,
-		taskQueue:      taskQueue,
-		logger:         logger,
-		healthy:        healthy,
-		webhookSecret:  webhookSecret,
-		apiHandler:     apiHandler,
-		webHandler:     webHandler,
-		db:             db,
+		temporalClient:      tc,
+		taskQueue:           taskQueue,
+		logger:              logger,
+		healthy:             healthy,
+		webhookSecret:       webhookSecret,
+		apiHandler:          apiHandler,
+		webHandler:          webHandler,
+		db:                  db,
+		correlationDebounce: correlationDebounce,
+		correlationHardCap:  correlationHardCap,
 	}
 }
 
@@ -215,7 +219,11 @@ func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity typ
 			alert,
 			opts,
 			workflow.TriageWorkflow,
-			types.TriageParams{Identity: identity},
+			types.TriageParams{
+				Identity:            identity,
+				CorrelationDebounce: h.correlationDebounce,
+				CorrelationHardCap:  h.correlationHardCap,
+			},
 		)
 		if err != nil {
 			return fmt.Errorf("signal alert %s: %w", alert.Fingerprint, err)

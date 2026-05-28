@@ -1,0 +1,42 @@
+# OOM scenario: Python process that allocates 1MB every 2 seconds.
+# With a 64Mi limit, OOM kill occurs in ~50-120 seconds.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: members-api
+  namespace: demo-apps
+  labels:
+    app: members-api
+    deployment: members-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: members-api
+  template:
+    metadata:
+      labels:
+        app: members-api
+        deployment: members-api
+    spec:
+      containers:
+        - name: members-api
+          image: python:3.11-slim
+          command:
+            - python
+            - -c
+            - |
+              import time
+              data = []
+              print("Starting memory leak simulation...")
+              while True:
+                  data.append('x' * 1048576)
+                  print(f"Allocated {len(data)} MB")
+                  time.sleep(2)
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 10m
+            limits:
+              memory: 64Mi
+              cpu: 100m

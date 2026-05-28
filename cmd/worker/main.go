@@ -57,6 +57,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	databaseURL := getEnv("DATABASE_URL", "")
 	webhookSecret := getEnv("WEBHOOK_SECRET", "")
 	listenAddr := getEnv("LISTEN_ADDR", ":8080")
+	correlationDebounce := parseDuration(getEnv("CORRELATION_DEBOUNCE", "60s"), 60*time.Second)
+	correlationHardCap := parseDuration(getEnv("CORRELATION_MAX_WINDOW", "5m"), 5*time.Minute)
 
 	fullAgentURL := fmt.Sprintf("%s/api/a2a/%s/%s", agentURL, agentNS, agentName)
 
@@ -166,7 +168,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		webHandler = wh
 		logger.Info("web dashboard enabled")
 	}
-	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, webHandler, db)
+	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, webHandler, db, correlationDebounce, correlationHardCap)
 
 	srv := &http.Server{
 		Addr:         listenAddr,
@@ -252,6 +254,14 @@ func parseLogLevel(level string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+func parseDuration(s string, fallback time.Duration) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
 
 // temporalLogger adapts slog to Temporal's logger interface.

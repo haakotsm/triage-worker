@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 
 	"github.com/haakotsm/triage-worker/internal/auth"
@@ -79,12 +80,17 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 	// Build prompt from alerts + enrichment
 	prompt := buildAgentPrompt(alerts, enrichment)
 
+	// Heartbeat before long-running operations to signal progress
+	activity.RecordHeartbeat(ctx, "building_request")
+
 	// Get JWT token
 	token, err := a.TokenProvider.Token(ctx)
 	if err != nil {
 		return types.TriageReport{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("auth failed: %v", err), "AuthError", err)
 	}
+
+	activity.RecordHeartbeat(ctx, "invoking_agent")
 
 	// Build A2A JSON-RPC request
 	a2aReq := a2aRequest{
@@ -138,6 +144,8 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 	// Handle response — may be SSE stream or plain JSON
 	contentType := resp.Header.Get("Content-Type")
 	var agentText string
+
+	activity.RecordHeartbeat(ctx, "parsing_response")
 
 	if strings.Contains(contentType, "text/event-stream") {
 		agentText, err = readSSEResponse(resp.Body)
@@ -336,24 +344,31 @@ func stripMarkdownJSON(s string) string {
 }
 
 // buildAgentPrompt constructs the prompt sent to the triage agent.
-// Uses code fences to isolate untrusted telemetry data.
+// Uses code fences and delimiters to isolate untrusted telemetry data.
 func buildAgentPrompt(alerts []types.Alert, enrichment types.EnrichmentResult) string {
 	var b strings.Builder
 
+	const maxAnnotationLen = 500
+
 	b.WriteString("## Correlated Alerts\n\n")
 	fmt.Fprintf(&b, "Total: %d firing alerts\n\n", len(alerts))
+	b.WriteString("```alert-data\n")
 	for i, alert := range alerts {
-		fmt.Fprintf(&b, "### Alert %d: %s\n", i+1, alert.Labels["alertname"])
-		fmt.Fprintf(&b, "- Severity: %s\n", alert.Labels["severity"])
-		fmt.Fprintf(&b, "- Namespace: %s\n", alert.Labels["namespace"])
+		fmt.Fprintf(&b, "### Alert %d: %s\n", i+1, sanitize(alert.Labels["alertname"]))
+		fmt.Fprintf(&b, "- Severity: %s\n", sanitize(alert.Labels["severity"]))
+		fmt.Fprintf(&b, "- Namespace: %s\n", sanitize(alert.Labels["namespace"]))
 		if pod := alert.Labels["pod"]; pod != "" {
-			fmt.Fprintf(&b, "- Pod: %s\n", pod)
+			fmt.Fprintf(&b, "- Pod: %s\n", sanitize(pod))
 		}
 		if desc := alert.Annotations["description"]; desc != "" {
-			fmt.Fprintf(&b, "- Description: %s\n", desc)
+			if len(desc) > maxAnnotationLen {
+				desc = desc[:maxAnnotationLen] + "...(truncated)"
+			}
+			fmt.Fprintf(&b, "- Description: %s\n", sanitize(desc))
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("```\n\n")
 
 	b.WriteString("## Enrichment Context\n\n")
 

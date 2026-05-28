@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubePodCrashLooping\", namespace=\"demo-apps\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "alertname": "KubePodCrashLooping",
+    "namespace": "demo-apps"
+  },
+  "commonLabels": {
+    "alertname": "KubePodCrashLooping",
+    "namespace": "demo-apps",
+    "severity": "critical",
+    "deployment": "catalog-api"
+  },
+  "commonAnnotations": {
+    "description": "Pod catalog-api is crash looping — missing required ConfigMap",
+    "summary": "Pod is crash looping"
+  },
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubePodCrashLooping",
+        "container": "catalog-api",
+        "namespace": "demo-apps",
+        "pod": "catalog-api-6c8d7e4f2-p9n3q",
+        "deployment": "catalog-api",
+        "severity": "critical"
+      },
+      "annotations": {
+        "description": "Pod catalog-api-6c8d7e4f2-p9n3q is restarting frequently — 5 restarts in 3 minutes",
+        "summary": "Pod is crash looping"
+      },
+      "startsAt": "2025-01-15T10:10:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_container_status_restarts_total",
+      "fingerprint": "demo-crash-001"
+    }
+  ]
+}

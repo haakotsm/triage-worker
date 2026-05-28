@@ -40,7 +40,12 @@ type LokiResult struct {
 // TriageParams are the initial parameters for the TriageWorkflow.
 type TriageParams struct {
 	Identity IncidentIdentity `json:"identity"`
-	// InitialAlert is NOT set — alerts come only via signals to avoid double-delivery.
+	// CorrelationDebounce overrides the default 60s debounce window.
+	// Zero means use the workflow default (60s).
+	CorrelationDebounce time.Duration `json:"correlation_debounce,omitempty"`
+	// CorrelationHardCap overrides the default 5m hard cap.
+	// Zero means use the workflow default (5m).
+	CorrelationHardCap time.Duration `json:"correlation_hard_cap,omitempty"`
 }
 
 // TriageResult is the final output of the TriageWorkflow.

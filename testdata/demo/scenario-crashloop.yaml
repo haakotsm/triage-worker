@@ -1,0 +1,39 @@
+# CrashLoopBackOff scenario: Deployment references a ConfigMap that doesn't exist.
+# Pod crashes immediately on startup, enters CrashLoopBackOff within 10s.
+# Fix: kubectl create configmap catalog-config -n demo-apps --from-literal=DB_HOST=postgres
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+  namespace: demo-apps
+  labels:
+    app: catalog-api
+    deployment: catalog-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: catalog-api
+  template:
+    metadata:
+      labels:
+        app: catalog-api
+        deployment: catalog-api
+    spec:
+      containers:
+        - name: catalog-api
+          image: busybox:1.36
+          command: ["sh", "-c", "echo DB is $DB_HOST && sleep 3600"]
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: catalog-config
+                  key: DB_HOST
+          resources:
+            requests:
+              memory: 16Mi
+              cpu: 10m
+            limits:
+              memory: 64Mi
+              cpu: 100m

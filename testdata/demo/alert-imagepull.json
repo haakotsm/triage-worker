@@ -1,0 +1,43 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubeContainerWaiting\", namespace=\"demo-apps\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "triage-webhook",
+  "groupLabels": {
+    "alertname": "KubeContainerWaiting",
+    "namespace": "demo-apps"
+  },
+  "commonLabels": {
+    "alertname": "KubeContainerWaiting",
+    "namespace": "demo-apps",
+    "severity": "warning",
+    "deployment": "gateway"
+  },
+  "commonAnnotations": {
+    "description": "Container gateway is waiting with reason ImagePullBackOff",
+    "summary": "Container is in waiting state"
+  },
+  "externalURL": "http://alertmanager.monitoring.svc:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubeContainerWaiting",
+        "container": "gateway",
+        "namespace": "demo-apps",
+        "pod": "gateway-4a7b2c1d3-r5t8w",
+        "deployment": "gateway",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "Container gateway in pod gateway-4a7b2c1d3-r5t8w is waiting: ImagePullBackOff — image ghcr.io/haakotsm/gateway:v99.0.0 not found",
+        "summary": "Container is in waiting state"
+      },
+      "startsAt": "2025-01-15T10:15:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.monitoring.svc:9090/graph?g0.expr=kube_pod_container_status_waiting_reason",
+      "fingerprint": "demo-imagepull-001"
+    }
+  ]
+}

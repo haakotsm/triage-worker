@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	promapi "github.com/prometheus/client_golang/api"
@@ -36,6 +37,7 @@ func (a *Activities) QueryPrometheus(ctx context.Context, identity types.Inciden
 	api := promv1.NewAPI(client)
 	result := types.PrometheusResult{Available: true}
 	now := time.Now()
+	var queryErrors []string
 
 	// Query restart rate over last 5 minutes
 	restartQuery := fmt.Sprintf(
@@ -58,32 +60,58 @@ func (a *Activities) QueryPrometheus(ctx context.Context, identity types.Inciden
 		for _, sample := range vector {
 			result.RestartRate += float64(sample.Value)
 		}
+	} else if err != nil {
+		queryErrors = append(queryErrors, "restarts: "+err.Error())
 	}
 
-	// Query memory usage percentage
+	// Query memory usage percentage — scoped to workload pods.
 	memQuery := fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace="%s"}) / sum(kube_pod_container_resource_limits{namespace="%s", resource="memory"}) * 100`,
-		identity.Namespace, identity.Namespace,
+		`sum(container_memory_working_set_bytes{namespace="%s", pod=~"%s-.*"}) / sum(kube_pod_container_resource_limits{namespace="%s", pod=~"%s-.*", resource="memory"}) * 100`,
+		identity.Namespace, identity.Name, identity.Namespace, identity.Name,
 	)
+	if identity.Kind == "Pod" {
+		memQuery = fmt.Sprintf(
+			`sum(container_memory_working_set_bytes{namespace="%s", pod="%s"}) / sum(kube_pod_container_resource_limits{namespace="%s", pod="%s", resource="memory"}) * 100`,
+			identity.Namespace, identity.Name, identity.Namespace, identity.Name,
+		)
+	}
 	val, _, err = api.Query(ctx, memQuery, now)
 	if err == nil && val.Type() == model.ValVector {
 		vector := val.(model.Vector)
 		if len(vector) > 0 {
 			result.MemoryPct = float64(vector[0].Value)
 		}
+	} else if err != nil {
+		queryErrors = append(queryErrors, "memory: "+err.Error())
 	}
 
-	// Query CPU usage
+	// Query CPU usage — scoped to workload pods.
 	cpuQuery := fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m]))`,
-		identity.Namespace,
+		`sum(rate(container_cpu_usage_seconds_total{namespace="%s", pod=~"%s-.*"}[5m]))`,
+		identity.Namespace, identity.Name,
 	)
+	if identity.Kind == "Pod" {
+		cpuQuery = fmt.Sprintf(
+			`sum(rate(container_cpu_usage_seconds_total{namespace="%s", pod="%s"}[5m]))`,
+			identity.Namespace, identity.Name,
+		)
+	}
 	val, _, err = api.Query(ctx, cpuQuery, now)
 	if err == nil && val.Type() == model.ValVector {
 		vector := val.(model.Vector)
 		if len(vector) > 0 {
 			result.CPUUsage = float64(vector[0].Value)
 		}
+	} else if err != nil {
+		queryErrors = append(queryErrors, "cpu: "+err.Error())
+	}
+
+	// If all queries failed, mark metrics as unavailable.
+	if len(queryErrors) == 3 {
+		result.Available = false
+		result.Error = "all queries failed: " + queryErrors[0]
+	} else if len(queryErrors) > 0 {
+		result.Error = "partial failure: " + strings.Join(queryErrors, "; ")
 	}
 
 	return result, nil
