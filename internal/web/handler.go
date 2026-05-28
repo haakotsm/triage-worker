@@ -108,9 +108,9 @@ type DashboardData struct {
 
 // DetailData is the template data for the report detail page.
 type DetailData struct {
-	Report          Report
-	L1Commands      []Recommendation
-	AgentRecs       []Recommendation
+	Report     Report
+	L1Commands []Recommendation
+	AgentRecs  []Recommendation
 }
 
 // Handler serves the web dashboard and static assets.
@@ -314,8 +314,24 @@ func (h *Handler) renderError(w http.ResponseWriter, msg string) {
 	}
 }
 
-// fetchDashboardData queries reports for the dashboard.
+// fetchDashboardData queries the data needed for the dashboard page.
 func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
+	data, err := h.fetchIncidentTableData(r)
+	if err != nil {
+		return DashboardData{}, err
+	}
+
+	stats, err := h.fetchStats(r.Context())
+	if err != nil {
+		h.logger.Warn("fetch stats for dashboard", "error", err)
+	}
+
+	data.Stats = stats
+	data.SSEEnabled = h.sse != nil
+	return data, nil
+}
+
+func (h *Handler) fetchIncidentTableData(r *http.Request) (DashboardData, error) {
 	q := r.URL.Query()
 	limit := intParam(q.Get("limit"), 20, 1, 100)
 	offset := intParam(q.Get("offset"), 0, 0, 10000)
@@ -344,14 +360,12 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 		where += " AND resolved_at IS NOT NULL"
 	}
 
-	// Count query — only completed/resolved reports.
 	var totalCount int
 	countQuery := "SELECT COUNT(*) FROM triage.reports " + where + " AND state IN ('reported', 'resolved')"
 	if err := h.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount); err != nil {
 		return DashboardData{}, fmt.Errorf("count: %w", err)
 	}
 
-	// Data query — only show completed/resolved reports (not in-flight).
 	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
 		classification, severity, root_cause, causal_chain, evidence,
 		recommendations, confidence, escalation_needed, alert_count,
@@ -361,7 +375,6 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
 			created_at DESC
 		LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
-	// Explicit copy to avoid mutating args' backing array.
 	dataArgs := make([]interface{}, len(args)+2)
 	copy(dataArgs, args)
 	dataArgs[len(args)] = limit
@@ -369,24 +382,19 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 
 	reports, err := h.queryReports(r.Context(), dataQuery, dataArgs...)
 	if err != nil {
-		return DashboardData{}, fmt.Errorf("query: %w", err)
+		return DashboardData{}, fmt.Errorf("query reports: %w", err)
 	}
 
-	// Fetch aggregate stats (non-fatal if it fails).
-	stats, err := h.fetchStats(r.Context())
-	if err != nil {
-		h.logger.Warn("fetch stats for dashboard", "error", err)
-	}
-
-	// Fetch active incidents (non-fatal if it fails).
-	incidents, err := FetchActiveIncidents(r.Context(), h.db)
-	if err != nil {
-		h.logger.Warn("fetch incidents for dashboard", "error", err)
+	incidents := []Incident{}
+	if status != "resolved" {
+		incidents, err = h.queryActiveIncidents(r.Context(), severity, search)
+		if err != nil {
+			return DashboardData{}, fmt.Errorf("query active incidents: %w", err)
+		}
 	}
 
 	return DashboardData{
 		Reports:    reports,
-		Stats:      stats,
 		Incidents:  incidents,
 		TotalCount: totalCount,
 		Limit:      limit,
@@ -613,6 +621,47 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 	return reports, rows.Err()
 }
 
+func (h *Handler) queryActiveIncidents(ctx context.Context, severity, search string) ([]Incident, error) {
+	where := "WHERE state IN ('correlating', 'enriching', 'triaging')"
+	args := []interface{}{}
+	argIdx := 1
+
+	if severity != "" {
+		where += " AND severity = $" + strconv.Itoa(argIdx)
+		args = append(args, severity)
+		argIdx++
+	}
+	if search != "" {
+		where += fmt.Sprintf(" AND (workload ILIKE $%d OR namespace ILIKE $%d OR alert_name ILIKE $%d)", argIdx, argIdx, argIdx)
+		args = append(args, "%"+search+"%")
+	}
+
+	rows, err := h.db.QueryContext(ctx, `SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at,
+		COALESCE(completed_at, created_at) AS updated_at
+		FROM triage.reports `+where+`
+		ORDER BY created_at DESC
+		LIMIT 50`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var incidents []Incident
+	for rows.Next() {
+		var inc Incident
+		if err := rows.Scan(&inc.ID, &inc.WorkflowID, &inc.Namespace, &inc.Workload,
+			&inc.Kind, &inc.AlertName, &inc.State, &inc.Severity,
+			&inc.CreatedAt, &inc.UpdatedAt); err != nil {
+			return nil, err
+		}
+		incidents = append(incidents, inc)
+	}
+	if incidents == nil {
+		incidents = []Incident{}
+	}
+	return incidents, rows.Err()
+}
+
 func intParam(s string, defaultVal, min, max int) int {
 	if s == "" {
 		return defaultVal
@@ -706,7 +755,7 @@ func templateFuncs() template.FuncMap {
 			}
 			return a / b
 		},
-		"mul":   func(a, b int) int { return a * b },
+		"mul": func(a, b int) int { return a * b },
 		"deref": func(t *time.Time) time.Time {
 			if t == nil {
 				return time.Time{}
@@ -749,7 +798,7 @@ func templateFuncs() template.FuncMap {
 				return "badge-info"
 			case "triaging":
 				return "badge-primary"
-			case "reported":
+			case "reported", "resolved":
 				return "badge-success"
 			default:
 				return "badge-ghost"
@@ -780,15 +829,13 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	h.sse.ServeHTTP(w, r)
 }
 
-// handlePartialIncidents renders just the incidents table fragment for htmx.
+// handlePartialIncidents renders the main incidents table fragment for htmx.
 func (h *Handler) handlePartialIncidents(w http.ResponseWriter, r *http.Request) {
-	incidents, err := FetchActiveIncidents(r.Context(), h.db)
+	data, err := h.fetchIncidentTableData(r)
 	if err != nil {
-		h.logger.Error("fetch incidents", "error", err)
+		h.logger.Error("fetch incidents table", "error", err)
 		h.renderError(w, "Failed to load incidents")
 		return
 	}
-	h.render(w, "incidents-table", map[string]interface{}{
-		"Incidents": incidents,
-	})
+	h.render(w, "incidents-table", data)
 }

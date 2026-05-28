@@ -1,22 +1,27 @@
 {{define "incidents-table"}}
 <div class="card bg-base-100 shadow-sm">
   <div class="card-body py-3 px-4">
-    <div class="flex items-center justify-between mb-2">
+    <input type="hidden" name="offset" value="{{.Offset}}">
+    <input type="hidden" name="limit" value="{{.Limit}}">
+
+    <div class="flex items-center justify-between mb-2 gap-3">
       <h3 class="font-semibold text-base-content flex items-center gap-2">
         <span class="loading loading-ring loading-sm text-warning"></span>
-        Active Incidents
-        <span class="badge badge-sm badge-ghost">{{len .Incidents}}</span>
+        Incidents
+        <span class="badge badge-sm badge-ghost">{{add (len .Incidents) (len .Reports)}}</span>
       </h3>
       <span class="text-xs text-base-content/50 font-mono">
         auto-refresh
       </span>
     </div>
-    {{if .Incidents}}
+
+    {{if or .Incidents .Reports}}
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead>
           <tr class="text-base-content/70">
             <th>State</th>
+            <th>Severity</th>
             <th>Workload</th>
             <th>Namespace</th>
             <th>Alert</th>
@@ -29,30 +34,72 @@
             <td>
               <div class="flex items-center gap-2">
                 {{if eq .State "correlating"}}
-                  <span class="loading loading-dots loading-xs text-warning"></span>
+                <span class="loading loading-dots loading-xs text-warning"></span>
                 {{else if eq .State "enriching"}}
-                  <span class="loading loading-spinner loading-xs text-info"></span>
+                <span class="loading loading-spinner loading-xs text-info"></span>
                 {{else if eq .State "triaging"}}
-                  <span class="loading loading-spinner loading-xs text-primary"></span>
+                <span class="loading loading-spinner loading-xs text-primary"></span>
                 {{else}}
-                  <span class="text-success">✓</span>
+                <span class="text-success">✓</span>
                 {{end}}
                 <span class="badge badge-xs {{incidentStateClass .State}}">{{.State}}</span>
               </div>
             </td>
+            <td><span class="badge badge-sm {{severityClass .Severity}}">{{.Severity}}</span></td>
             <td class="font-mono text-xs">{{.Workload}}</td>
             <td class="text-xs text-base-content/70">{{.Namespace}}</td>
             <td class="text-xs">{{.AlertName}}</td>
-            <td class="text-xs text-base-content/50 font-mono">
-              {{formatDuration .CreatedAt}}
+            <td class="text-xs text-base-content/50 font-mono">{{formatDuration .CreatedAt}}</td>
+          </tr>
+          {{end}}
+
+          {{range .Reports}}
+          <tr class="hover cursor-pointer" tabindex="0" role="link"
+              hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true"
+              hx-trigger="click, keyup[key=='Enter']">
+            <td>
+              <div class="flex items-center gap-2">
+                <span class="text-success">✓</span>
+                <span class="badge badge-xs {{incidentStateClass .State}}">{{.State}}</span>
+              </div>
             </td>
+            <td><span class="badge badge-sm {{severityClass .Severity}}">{{.Severity}}</span></td>
+            <td class="font-mono text-xs">{{.Workload}}</td>
+            <td class="text-xs text-base-content/70">{{.Namespace}}</td>
+            <td class="text-xs">
+              <div class="font-medium">{{.AlertName}}</div>
+              {{if .Summary}}<div class="text-[11px] text-base-content/60 line-clamp-2">{{.Summary}}</div>{{end}}
+            </td>
+            <td class="text-xs text-base-content/50 font-mono">{{formatDuration .CreatedAt}}</td>
           </tr>
           {{end}}
         </tbody>
       </table>
     </div>
     {{else}}
-    <p class="text-sm text-base-content/50 py-2">No active incidents</p>
+    <p class="text-sm text-base-content/50 py-2">No incidents found for the current filters</p>
+    {{end}}
+
+    {{if gt .TotalCount .Limit}}
+    <div class="flex justify-center mt-4">
+      <div class="join">
+        {{if gt .Offset 0}}
+        <button class="join-item btn btn-sm" aria-label="Previous page"
+                hx-get="/partials/incidents?offset={{sub .Offset .Limit}}&limit={{.Limit}}"
+                hx-target="#incidents-panel" hx-swap="innerHTML"
+                hx-include="#incident-filters [name='search'],#incident-filters [name='severity'],#incident-filters [name='status']">«</button>
+        {{end}}
+        <button class="join-item btn btn-sm btn-disabled">
+          Completed page {{add (div .Offset .Limit) 1}} of {{pages .TotalCount .Limit}}
+        </button>
+        {{if lt (add .Offset .Limit) .TotalCount}}
+        <button class="join-item btn btn-sm" aria-label="Next page"
+                hx-get="/partials/incidents?offset={{add .Offset .Limit}}&limit={{.Limit}}"
+                hx-target="#incidents-panel" hx-swap="innerHTML"
+                hx-include="#incident-filters [name='search'],#incident-filters [name='severity'],#incident-filters [name='status']">»</button>
+        {{end}}
+      </div>
+    </div>
     {{end}}
   </div>
 </div>
