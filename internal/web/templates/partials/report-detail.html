@@ -46,20 +46,15 @@
 
     {{/* Left column: Understanding — 3 of 5 columns */}}
     <div class="lg:col-span-3 flex flex-col gap-4">
-      {{/* Summary + Root Cause combined */}}
+      {{/* Root Cause */}}
+      {{if .Report.RootCause}}
       <div class="card bg-base-100 shadow">
         <div class="card-body">
-          {{if .Report.Summary}}
-          <h3 class="font-semibold">Summary</h3>
-          <p class="break-words whitespace-pre-line">{{.Report.Summary}}</p>
-          {{end}}
-          {{if and .Report.Summary .Report.RootCause}}<div class="divider my-2"></div>{{end}}
-          {{if .Report.RootCause}}
           <h3 class="font-semibold">Root Cause</h3>
           <p class="break-words whitespace-pre-line">{{.Report.RootCause}}</p>
-          {{end}}
         </div>
       </div>
+      {{end}}
 
       {{/* Causal Chain */}}
       {{if gt (len .Report.CausalChain) 0}}
