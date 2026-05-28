@@ -12,6 +12,7 @@ import (
 
 const (
 	AlertSignalName      = "alert"
+	ResolveSignalName    = "resolve"
 	CorrelationDebounce  = 60 * time.Second
 	CorrelationHardCap   = 5 * time.Minute
 )
@@ -24,9 +25,14 @@ const (
 //  3. Enriches: parallel queries to Prometheus, K8s API, Loki
 //  4. Triages: invokes kagent error-triage-agent via A2A protocol
 //  5. Reports: stores structured diagnosis to PostgreSQL
+//
+// The workflow also listens for a "resolve" signal. If received at any point
+// before the agent invocation completes, the workflow exits early with
+// AutoResolved=true, avoiding wasteful LLM inference on already-resolved issues.
 func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.TriageResult, error) {
 	logger := workflow.GetLogger(ctx)
 	startedAt := workflow.Now(ctx)
+	wfID := workflow.GetInfo(ctx).WorkflowExecution.ID
 
 	// Activity references (nil pointer — Temporal uses method name for dispatch)
 	var enrichAct *activity.Activities
@@ -40,6 +46,15 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	}
 	stateCtx := workflow.WithActivityOptions(ctx, stateOpts)
+
+	// --- Resolve signal listener ---
+	// Runs concurrently; sets resolved=true when a "resolve" signal arrives.
+	resolved := false
+	resolveCh := workflow.GetSignalChannel(ctx, ResolveSignalName)
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		resolveCh.Receive(gCtx, nil)
+		resolved = true
+	})
 
 	// --- Step 1: Correlate alerts ---
 	debounceWindow := CorrelationDebounce
@@ -56,6 +71,21 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	}
 	logger.Info("correlation complete", "alert_count", len(alerts))
 
+	// Check if resolved during correlation window
+	if resolved {
+		logger.Info("auto-resolved during correlation", "alert_count", len(alerts))
+		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+			wfID, "resolved", "").Get(ctx, nil)
+		return types.TriageResult{
+			WorkflowID:   wfID,
+			Identity:     params.Identity,
+			AlertCount:   len(alerts),
+			StartedAt:    startedAt,
+			CompletedAt:  workflow.Now(ctx),
+			AutoResolved: true,
+		}, nil
+	}
+
 	// --- Upsert search attributes (must be in workflow code, not activity) ---
 	_ = workflow.UpsertTypedSearchAttributes(ctx,
 		NamespaceKey.ValueSet(params.Identity.Namespace),
@@ -65,7 +95,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	// --- Step 2: Parallel enrichment ---
 	// Emit "enriching" state for realtime dashboard.
 	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
-		workflow.GetInfo(ctx).WorkflowExecution.ID, "enriching", "").Get(ctx, nil)
+		wfID, "enriching", "").Get(ctx, nil)
 
 	enrichOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
@@ -106,9 +136,24 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	}
 
 	// --- Step 3: Invoke triage agent ---
+	// Check if resolved during enrichment (avoid expensive LLM call)
+	if resolved {
+		logger.Info("auto-resolved during enrichment")
+		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+			wfID, "resolved", "").Get(ctx, nil)
+		return types.TriageResult{
+			WorkflowID:   wfID,
+			Identity:     params.Identity,
+			AlertCount:   len(alerts),
+			StartedAt:    startedAt,
+			CompletedAt:  workflow.Now(ctx),
+			AutoResolved: true,
+		}, nil
+	}
+
 	// Emit "triaging" state for realtime dashboard.
 	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
-		workflow.GetInfo(ctx).WorkflowExecution.ID, "triaging", "").Get(ctx, nil)
+		wfID, "triaging", "").Get(ctx, nil)
 
 	agentOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 300 * time.Second,
@@ -132,7 +177,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		logger.Error("agent invocation failed", "error", err)
 		// Transition DB state to "failed" so the row isn't stuck in "triaging".
 		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
-			workflow.GetInfo(ctx).WorkflowExecution.ID, "failed", "").Get(ctx, nil)
+			wfID, "failed", "").Get(ctx, nil)
 		return types.TriageResult{}, err
 	}
 
@@ -162,7 +207,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	reportCtx := workflow.WithActivityOptions(ctx, reportOpts)
 
 	result := types.TriageResult{
-		WorkflowID:     workflow.GetInfo(ctx).WorkflowExecution.ID,
+		WorkflowID:     wfID,
 		Identity:       params.Identity,
 		AlertCount:     len(alerts),
 		Classification: report.Classification,

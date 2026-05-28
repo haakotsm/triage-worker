@@ -59,4 +59,5 @@ type TriageResult struct {
 	Report         *TriageReport    `json:"report"`
 	StartedAt      time.Time        `json:"started_at"`
 	CompletedAt    time.Time        `json:"completed_at"`
+	AutoResolved   bool             `json:"auto_resolved,omitempty"`
 }

@@ -246,6 +246,7 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleResolvedAlerts marks reports as resolved for resolved alert groups.
+// It also signals any running workflows so they can exit early.
 // Returns the number of reports updated.
 func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGroup) int {
 	if h.db == nil {
@@ -277,6 +278,16 @@ func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGro
 		if n, _ := result.RowsAffected(); n > 0 {
 			h.logger.Info("report resolved", "workflow_id", wfID)
 			updated++
+		}
+
+		// Signal running workflow to abort early (no-op if already completed)
+		if h.temporalClient != nil {
+			err = h.temporalClient.SignalWorkflow(ctx, wfID, "", workflow.ResolveSignalName, nil)
+			if err != nil {
+				// Expected for completed workflows — log at debug level
+				h.logger.Debug("signal resolve to workflow (may already be done)",
+					"workflow_id", wfID, "error", err)
+			}
 		}
 	}
 	return updated

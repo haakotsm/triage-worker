@@ -291,3 +291,101 @@ func TestTriageWorkflow_EnrichmentPartialFailure(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError()) // Workflow should succeed despite partial enrichment failure
 }
+
+func TestTriageWorkflow_ResolveSignalDuringCorrelation(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var reportAct *activity.ReportActivity
+	env.RegisterActivity(reportAct)
+
+	// Send alert at T=0
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AlertSignalName, types.Alert{
+			Status:      "firing",
+			Fingerprint: "fp-resolve-1",
+			Labels:      map[string]string{"alertname": "Test", "namespace": "ns", "deployment": "app"},
+			StartsAt:    time.Now(),
+		})
+	}, 0)
+
+	// Send resolve signal at T=30s (during correlation debounce)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(ResolveSignalName, nil)
+	}, 30*time.Second)
+
+	// UpdateIncidentState should be called with "resolved"
+	env.OnActivity(reportAct.UpdateIncidentState, mock.Anything, mock.Anything, "resolved", "").Return(nil)
+
+	params := types.TriageParams{
+		Identity: types.IncidentIdentity{
+			Namespace: "ns",
+			Kind:      "Deployment",
+			Name:      "app",
+			AlertName: "Test",
+		},
+		CorrelationDebounce: 60 * time.Second,
+	}
+	env.ExecuteWorkflow(TriageWorkflow, params)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result types.TriageResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.True(t, result.AutoResolved, "workflow should be auto-resolved")
+	require.Equal(t, 1, result.AlertCount)
+	require.Empty(t, result.Classification)
+}
+
+func TestTriageWorkflow_ResolveSignalBeforeAgent(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var enrichAct *activity.Activities
+	var agentAct *activity.AgentActivity
+	var reportAct *activity.ReportActivity
+	var k8sAct *activity.K8sActivity
+
+	env.RegisterActivity(enrichAct)
+	env.RegisterActivity(agentAct)
+	env.RegisterActivity(reportAct)
+	env.RegisterActivity(k8sAct)
+
+	// Send alert at T=0
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AlertSignalName, types.Alert{
+			Status:      "firing",
+			Fingerprint: "fp-resolve-2",
+			Labels:      map[string]string{"alertname": "Test", "namespace": "ns", "deployment": "app"},
+			StartsAt:    time.Now(),
+		})
+	}, 0)
+
+	// Send resolve signal at T=30s — during correlation window.
+	// The signal goroutine sets resolved=true, checked after correlation completes.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(ResolveSignalName, nil)
+	}, 30*time.Second)
+
+	// UpdateIncidentState should be called with "resolved" (early exit after correlation)
+	env.OnActivity(reportAct.UpdateIncidentState, mock.Anything, mock.Anything, "resolved", "").Return(nil)
+
+	params := types.TriageParams{
+		Identity: types.IncidentIdentity{
+			Namespace: "ns",
+			Kind:      "Deployment",
+			Name:      "app",
+			AlertName: "Test",
+		},
+	}
+	env.ExecuteWorkflow(TriageWorkflow, params)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var result types.TriageResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.True(t, result.AutoResolved, "workflow should be auto-resolved before agent call")
+	require.Empty(t, result.Classification)
+}
