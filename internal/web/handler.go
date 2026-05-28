@@ -14,6 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.temporal.io/sdk/client"
+
+	triageworkflow "github.com/haakotsm/triage-worker/internal/workflow"
 )
 
 // Report mirrors api.Report for template rendering.
@@ -111,6 +115,9 @@ type DetailData struct {
 	Report     Report
 	L1Commands []Recommendation
 	AgentRecs  []Recommendation
+	Incident   *Incident
+	LiveStatus triageworkflow.WorkflowStatus
+	SSEEnabled bool
 }
 
 // Handler serves the web dashboard and static assets.
@@ -120,12 +127,18 @@ type Handler struct {
 	static   http.Handler
 	db       *sql.DB
 	logger   *slog.Logger
+	temporal client.Client
 	sse      *SSEBroker // optional: nil if SSE not configured
 }
 
 // SetSSEBroker attaches an SSE broker for realtime event streaming.
 func (h *Handler) SetSSEBroker(b *SSEBroker) {
 	h.sse = b
+}
+
+// SetTemporalClient attaches a Temporal client for live workflow queries.
+func (h *Handler) SetTemporalClient(tc client.Client) {
+	h.temporal = tc
 }
 
 // NewHandler creates a web dashboard handler.
@@ -193,6 +206,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePartialStats(w, r)
 	case r.URL.Path == "/partials/incidents":
 		h.handlePartialIncidents(w, r)
+	case strings.HasPrefix(r.URL.Path, "/incidents/") && strings.HasSuffix(r.URL.Path, "/status"):
+		h.handleIncidentStatus(w, r)
+	case strings.HasPrefix(r.URL.Path, "/incidents/"):
+		h.handleIncident(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
 		h.handleDetail(w, r)
 	default:
@@ -278,6 +295,89 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.render(w, "detail", data)
 	}
+}
+
+func (h *Handler) handleIncident(w http.ResponseWriter, r *http.Request) {
+	workflowID := decodeWorkflowPath(strings.TrimPrefix(r.URL.Path, "/incidents/"))
+	if workflowID == "" {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+
+	data, redirectURL, found, err := h.loadIncidentLiveData(r.Context(), workflowID)
+	if err != nil {
+		h.logger.Error("fetch incident", "error", err, "workflow_id", workflowID)
+		h.renderError(w, "Failed to load incident")
+		return
+	}
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	if redirectURL != "" {
+		redirectRequest(w, r, redirectURL)
+		return
+	}
+
+	if isHTMX(r) {
+		h.render(w, "incident-live", data)
+	} else {
+		h.render(w, "detail", data)
+	}
+}
+
+func (h *Handler) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/incidents/"), "/status")
+	workflowID := decodeWorkflowPath(rawID)
+	if workflowID == "" {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	if !isHTMX(r) {
+		http.Redirect(w, r, "/incidents/"+encodeWorkflowPath(workflowID), http.StatusFound)
+		return
+	}
+
+	data, redirectURL, found, err := h.loadIncidentLiveData(r.Context(), workflowID)
+	if err != nil {
+		h.logger.Error("fetch incident status", "error", err, "workflow_id", workflowID)
+		h.renderError(w, "Failed to load incident status")
+		return
+	}
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	if redirectURL != "" {
+		redirectRequest(w, r, redirectURL)
+		return
+	}
+
+	h.render(w, "incident-live-panel", data)
+}
+
+func (h *Handler) loadIncidentLiveData(ctx context.Context, workflowID string) (DetailData, string, bool, error) {
+	incident, err := h.fetchIncident(ctx, workflowID)
+	if err != nil {
+		return DetailData{}, "", false, err
+	}
+	if incident == nil {
+		return DetailData{}, "", false, nil
+	}
+	if isTerminalIncidentState(incident.State) {
+		return DetailData{}, reportPath(incident.ID), true, nil
+	}
+
+	status := h.queryWorkflowStatus(ctx, *incident)
+	if status.Step == "complete" {
+		return DetailData{}, reportPath(incident.ID), true, nil
+	}
+
+	return DetailData{
+		Incident:   incident,
+		LiveStatus: status,
+		SSEEnabled: h.sse != nil,
+	}, "", true, nil
 }
 
 func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
@@ -662,6 +762,109 @@ func (h *Handler) queryActiveIncidents(ctx context.Context, severity, search str
 	return incidents, rows.Err()
 }
 
+func (h *Handler) fetchIncident(ctx context.Context, workflowID string) (*Incident, error) {
+	row := h.db.QueryRowContext(ctx, `SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at,
+		COALESCE(completed_at, created_at) AS updated_at
+		FROM triage.reports
+		WHERE workflow_id = $1`, workflowID)
+
+	var incident Incident
+	if err := row.Scan(
+		&incident.ID, &incident.WorkflowID, &incident.Namespace, &incident.Workload,
+		&incident.Kind, &incident.AlertName, &incident.State, &incident.Severity,
+		&incident.CreatedAt, &incident.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &incident, nil
+}
+
+func (h *Handler) queryWorkflowStatus(ctx context.Context, incident Incident) triageworkflow.WorkflowStatus {
+	status := triageworkflow.WorkflowStatus{
+		Step:      incident.State,
+		ElapsedMs: time.Since(incident.CreatedAt).Milliseconds(),
+		Resolved:  incident.State == "resolved",
+	}
+	if status.Step == "" {
+		status.Step = "correlating"
+	}
+	if h.temporal == nil {
+		return status
+	}
+
+	encoded, err := h.temporal.QueryWorkflow(ctx, incident.WorkflowID, "", triageworkflow.StatusQueryName)
+	if err != nil {
+		h.logger.Warn("query workflow status", "workflow_id", incident.WorkflowID, "error", err)
+		return status
+	}
+
+	var live triageworkflow.WorkflowStatus
+	if err := encoded.Get(&live); err != nil {
+		h.logger.Warn("decode workflow status", "workflow_id", incident.WorkflowID, "error", err)
+		return status
+	}
+	if live.Step == "" {
+		live.Step = status.Step
+	}
+	if live.ElapsedMs <= 0 {
+		live.ElapsedMs = status.ElapsedMs
+	}
+	if incident.State == "resolved" {
+		live.Resolved = true
+	}
+	return live
+}
+
+func encodeWorkflowPath(workflowID string) string {
+	return strings.ReplaceAll(workflowID, "/", "|")
+}
+
+func decodeWorkflowPath(workflowID string) string {
+	return strings.ReplaceAll(strings.Trim(workflowID, "/"), "|", "/")
+}
+
+func reportPath(id int64) string {
+	return "/reports/" + strconv.FormatInt(id, 10)
+}
+
+func redirectRequest(w http.ResponseWriter, r *http.Request, location string) {
+	if isHTMX(r) {
+		w.Header().Set("HX-Redirect", location)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, location, http.StatusFound)
+}
+
+func isTerminalIncidentState(state string) bool {
+	switch state {
+	case "reported", "resolved", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func incidentStepRank(step string) int {
+	switch step {
+	case "correlating":
+		return 1
+	case "enriching":
+		return 2
+	case "triaging":
+		return 3
+	case "reporting":
+		return 4
+	case "complete", "reported", "resolved", "failed":
+		return 5
+	default:
+		return 0
+	}
+}
+
 func intParam(s string, defaultVal, min, max int) int {
 	if s == "" {
 		return defaultVal
@@ -790,6 +993,10 @@ func templateFuncs() template.FuncMap {
 		"fmtPct": func(f float64) string {
 			return fmt.Sprintf("%.0f", f)
 		},
+		"workflowPath": encodeWorkflowPath,
+		"stepReached": func(current, target string) bool {
+			return incidentStepRank(current) >= incidentStepRank(target)
+		},
 		"incidentStateClass": func(state string) string {
 			switch state {
 			case "correlating":
@@ -798,8 +1005,12 @@ func templateFuncs() template.FuncMap {
 				return "badge-info"
 			case "triaging":
 				return "badge-primary"
-			case "reported", "resolved":
+			case "reporting":
+				return "badge-secondary"
+			case "reported", "resolved", "complete":
 				return "badge-success"
+			case "failed":
+				return "badge-error"
 			default:
 				return "badge-ghost"
 			}

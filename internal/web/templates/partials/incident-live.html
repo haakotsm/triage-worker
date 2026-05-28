@@ -1,0 +1,110 @@
+{{define "incident-live"}}
+<div class="flex flex-col gap-4" {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}>
+  <div class="breadcrumbs text-sm">
+    <ul>
+      <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
+      <li>Incident</li>
+    </ul>
+  </div>
+
+  {{template "incident-live-panel" .}}
+</div>
+{{end}}
+
+{{define "incident-live-panel"}}
+<div id="incident-live-panel"
+     class="flex flex-col gap-4"
+     x-data="{ elapsedMs: {{.LiveStatus.ElapsedMs}}, formatElapsed() { const totalSeconds = Math.floor(this.elapsedMs / 1000); const hours = Math.floor(totalSeconds / 3600); const minutes = Math.floor((totalSeconds % 3600) / 60); const seconds = totalSeconds % 60; if (hours > 0) { return hours + 'h ' + minutes + 'm'; } if (minutes > 0) { return minutes + 'm ' + seconds + 's'; } return seconds + 's'; } }"
+     hx-get="/incidents/{{workflowPath .Incident.WorkflowID}}/status"
+     hx-trigger="every 2s{{if .SSEEnabled}}, sse:incident-update{{end}}"
+     hx-target="this"
+     hx-swap="outerHTML">
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <div class="flex justify-between items-start gap-3 flex-wrap">
+        <div>
+          <h2 class="card-title text-lg font-mono">
+            {{.Incident.Kind}}/{{.Incident.Workload}}
+            <span class="badge {{severityClass .Incident.Severity}}">{{if .Incident.Severity}}{{.Incident.Severity}}{{else}}pending{{end}}</span>
+          </h2>
+          <p class="text-sm text-base-content/60 mt-1">
+            Namespace: <span class="font-mono">{{.Incident.Namespace}}</span>
+            · Alert: {{.Incident.AlertName}}
+          </p>
+          <p class="text-xs text-base-content/50 font-mono mt-2 break-all">Workflow: {{.Incident.WorkflowID}}</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="badge {{incidentStateClass .LiveStatus.Step}}">{{.LiveStatus.Step}}</span>
+          {{if .LiveStatus.Resolved}}
+          <span class="badge badge-success">Resolved</span>
+          {{else}}
+          <span class="badge badge-warning badge-outline">In flight</span>
+          {{end}}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow">
+    <div class="card-body gap-4">
+      <div>
+        <h3 class="font-semibold">Progress</h3>
+        <p class="text-sm text-base-content/60">Live workflow updates every 2 seconds.</p>
+      </div>
+      <ul class="steps steps-vertical lg:steps-horizontal w-full">
+        <li class="step {{if stepReached .LiveStatus.Step "correlating"}}step-primary{{end}}">Correlating</li>
+        <li class="step {{if stepReached .LiveStatus.Step "enriching"}}step-primary{{end}}">Enriching</li>
+        <li class="step {{if stepReached .LiveStatus.Step "triaging"}}step-primary{{end}}">Triaging</li>
+        <li class="step {{if stepReached .LiveStatus.Step "complete"}}step-primary{{end}}">Complete</li>
+      </ul>
+      {{if eq .LiveStatus.Step "reporting"}}
+      <div class="alert alert-info">
+        <span>Finalizing and saving the report…</span>
+      </div>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="stats stats-vertical lg:stats-horizontal shadow bg-base-100">
+    <div class="stat">
+      <div class="stat-title">Elapsed</div>
+      <div class="stat-value text-primary text-2xl" x-text="formatElapsed()"></div>
+      <div class="stat-desc">Updated live</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Alerts</div>
+      <div class="stat-value text-2xl">{{.LiveStatus.AlertCount}}</div>
+      <div class="stat-desc">Correlated into this incident</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Started</div>
+      <div class="stat-value text-2xl">{{formatDuration .Incident.CreatedAt}}</div>
+      <div class="stat-desc">Since incident row was created</div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h3 class="font-semibold">Workload identity</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+        <div>
+          <div class="text-base-content/60">Namespace</div>
+          <div class="font-mono">{{.Incident.Namespace}}</div>
+        </div>
+        <div>
+          <div class="text-base-content/60">Kind</div>
+          <div class="font-mono">{{.Incident.Kind}}</div>
+        </div>
+        <div>
+          <div class="text-base-content/60">Workload</div>
+          <div class="font-mono">{{.Incident.Workload}}</div>
+        </div>
+        <div>
+          <div class="text-base-content/60">Alert</div>
+          <div class="font-mono break-all">{{.Incident.AlertName}}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

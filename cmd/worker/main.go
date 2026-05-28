@@ -154,6 +154,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("create web handler: %w", err)
 		}
+		wh.SetTemporalClient(tc)
 
 		// SSE broker for realtime updates (requires DATABASE_URL for PG LISTEN).
 		sseBroker := web.NewSSEBroker(db, databaseURL, logger)
