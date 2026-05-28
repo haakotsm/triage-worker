@@ -199,6 +199,9 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		ALTER TABLE triage.reports ALTER COLUMN completed_at DROP NOT NULL;
 
 		-- Enforce valid lifecycle states.
+		-- Clean up any invalid state values first.
+		UPDATE triage.reports SET state = 'reported'
+			WHERE state NOT IN ('correlating','enriching','triaging','reported','resolved');
 		DO $$ BEGIN
 			ALTER TABLE triage.reports ADD CONSTRAINT chk_state
 				CHECK (state IN ('correlating','enriching','triaging','reported','resolved'));
