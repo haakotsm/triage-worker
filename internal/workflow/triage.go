@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -13,9 +14,18 @@ import (
 const (
 	AlertSignalName      = "alert"
 	ResolveSignalName    = "resolve"
+	StatusQueryName      = "get-status"
 	CorrelationDebounce  = 60 * time.Second
 	CorrelationHardCap   = 5 * time.Minute
 )
+
+// WorkflowStatus is the query response for get-status.
+type WorkflowStatus struct {
+	Step       string `json:"step"`
+	AlertCount int    `json:"alert_count"`
+	ElapsedMs  int64  `json:"elapsed_ms"`
+	Resolved   bool   `json:"resolved"`
+}
 
 // TriageWorkflow orchestrates alert correlation, enrichment, and AI diagnosis.
 //
@@ -47,13 +57,31 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	}
 	stateCtx := workflow.WithActivityOptions(ctx, stateOpts)
 
-	// --- Resolve signal listener ---
-	// Runs concurrently; sets resolved=true when a "resolve" signal arrives.
+	// --- Query handler: exposes current workflow step for observability ---
+	currentStep := "correlating"
+	alertCount := 0
 	resolved := false
+
+	err := workflow.SetQueryHandler(ctx, StatusQueryName, func() (WorkflowStatus, error) {
+		return WorkflowStatus{
+			Step:       currentStep,
+			AlertCount: alertCount,
+			ElapsedMs:  workflow.Now(ctx).Sub(startedAt).Milliseconds(),
+			Resolved:   resolved,
+		}, nil
+	})
+	if err != nil {
+		return types.TriageResult{}, fmt.Errorf("register query handler: %w", err)
+	}
+
+	// --- Resolve signal listener ---
+	// Drains all resolve signals in a loop to prevent buffering.
 	resolveCh := workflow.GetSignalChannel(ctx, ResolveSignalName)
 	workflow.Go(ctx, func(gCtx workflow.Context) {
-		resolveCh.Receive(gCtx, nil)
-		resolved = true
+		for {
+			resolveCh.Receive(gCtx, nil)
+			resolved = true
+		}
 	})
 
 	// --- Step 1: Correlate alerts ---
@@ -69,17 +97,18 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	if err != nil {
 		return types.TriageResult{}, err
 	}
-	logger.Info("correlation complete", "alert_count", len(alerts))
+	alertCount = len(alerts)
+	logger.Info("correlation complete", "alert_count", alertCount)
 
 	// Check if resolved during correlation window
 	if resolved {
-		logger.Info("auto-resolved during correlation", "alert_count", len(alerts))
+		logger.Info("auto-resolved during correlation", "alert_count", alertCount)
 		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
 			wfID, "resolved", "").Get(ctx, nil)
 		return types.TriageResult{
 			WorkflowID:   wfID,
 			Identity:     params.Identity,
-			AlertCount:   len(alerts),
+			AlertCount:   alertCount,
 			StartedAt:    startedAt,
 			CompletedAt:  workflow.Now(ctx),
 			AutoResolved: true,
@@ -93,7 +122,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	)
 
 	// --- Step 2: Parallel enrichment ---
-	// Emit "enriching" state for realtime dashboard.
+	currentStep = "enriching"
 	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
 		wfID, "enriching", "").Get(ctx, nil)
 
@@ -144,20 +173,20 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		return types.TriageResult{
 			WorkflowID:   wfID,
 			Identity:     params.Identity,
-			AlertCount:   len(alerts),
+			AlertCount:   alertCount,
 			StartedAt:    startedAt,
 			CompletedAt:  workflow.Now(ctx),
 			AutoResolved: true,
 		}, nil
 	}
 
-	// Emit "triaging" state for realtime dashboard.
+	currentStep = "triaging"
 	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
 		wfID, "triaging", "").Get(ctx, nil)
 
 	agentOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 300 * time.Second,
-		HeartbeatTimeout:    300 * time.Second,
+		HeartbeatTimeout:    90 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    5 * time.Second,
 			BackoffCoefficient: 2.0,
@@ -171,11 +200,45 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	}
 	agentCtx := workflow.WithActivityOptions(ctx, agentOpts)
 
+	// Use a cancellable context for the agent activity so we can abort on resolve.
+	agentCancelCtx, cancelAgent := workflow.WithCancel(agentCtx)
+	agentFuture := workflow.ExecuteActivity(agentCancelCtx, agentAct.InvokeTriageAgent, alerts, enrichment)
+
+	// Wait for either agent completion or resolve signal
 	var report types.TriageReport
-	err = workflow.ExecuteActivity(agentCtx, agentAct.InvokeTriageAgent, alerts, enrichment).Get(ctx, &report)
+	sel := workflow.NewSelector(ctx)
+	agentDone := false
+
+	sel.AddFuture(agentFuture, func(f workflow.Future) {
+		agentDone = true
+		err = f.Get(ctx, &report)
+	})
+
+	sel.AddReceive(resolveCh, func(c workflow.ReceiveChannel, more bool) {
+		c.Receive(ctx, nil)
+		resolved = true
+	})
+
+	sel.Select(ctx)
+
+	if resolved && !agentDone {
+		cancelAgent()
+		logger.Info("auto-resolved during triage — cancelling agent activity")
+		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+			wfID, "resolved", "").Get(ctx, nil)
+		return types.TriageResult{
+			WorkflowID:   wfID,
+			Identity:     params.Identity,
+			AlertCount:   alertCount,
+			StartedAt:    startedAt,
+			CompletedAt:  workflow.Now(ctx),
+			AutoResolved: true,
+		}, nil
+	}
+
+	// Agent completed (possibly with error)
 	if err != nil {
 		logger.Error("agent invocation failed", "error", err)
-		// Transition DB state to "failed" so the row isn't stuck in "triaging".
 		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
 			wfID, "failed", "").Get(ctx, nil)
 		return types.TriageResult{}, err
@@ -196,6 +259,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	types.NormalizeRecommendations(&report)
 
 	// --- Step 4: Store report ---
+	currentStep = "reporting"
 	reportOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 15 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
@@ -209,7 +273,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	result := types.TriageResult{
 		WorkflowID:     wfID,
 		Identity:       params.Identity,
-		AlertCount:     len(alerts),
+		AlertCount:     alertCount,
 		Classification: report.Classification,
 		Severity:       report.Severity,
 		RootCause:      report.RootCause,
@@ -224,6 +288,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		// Non-fatal: report is in workflow history even if DB write fails
 	}
 
+	currentStep = "complete"
 	logger.Info("triage complete",
 		"classification", report.Classification,
 		"severity", report.Severity,

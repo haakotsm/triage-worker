@@ -389,3 +389,65 @@ func TestTriageWorkflow_ResolveSignalBeforeAgent(t *testing.T) {
 	require.True(t, result.AutoResolved, "workflow should be auto-resolved before agent call")
 	require.Empty(t, result.Classification)
 }
+
+func TestTriageWorkflow_QueryHandler(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+
+	var enrichAct *activity.Activities
+	var agentAct *activity.AgentActivity
+	var reportAct *activity.ReportActivity
+	var k8sAct *activity.K8sActivity
+
+	env.RegisterActivity(enrichAct)
+	env.RegisterActivity(agentAct)
+	env.RegisterActivity(reportAct)
+	env.RegisterActivity(k8sAct)
+
+	// Send alert at T=0
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(AlertSignalName, types.Alert{
+			Status:      "firing",
+			Fingerprint: "fp-query-1",
+			Labels:      map[string]string{"alertname": "Test", "namespace": "ns", "deployment": "app"},
+			StartsAt:    time.Now(),
+		})
+	}, 0)
+
+	// Query at T=30s (during correlation — step should be "correlating")
+	env.RegisterDelayedCallback(func() {
+		encoded, err := env.QueryWorkflow(StatusQueryName)
+		require.NoError(t, err)
+		var status WorkflowStatus
+		require.NoError(t, encoded.Get(&status))
+		require.Equal(t, "correlating", status.Step)
+	}, 30*time.Second)
+
+	// Mock all activities
+	env.OnActivity(enrichAct.QueryPrometheus, mock.Anything, mock.Anything, mock.Anything).Return(
+		types.PrometheusResult{Available: true}, nil)
+	env.OnActivity(k8sAct.QueryKubernetesAPI, mock.Anything, mock.Anything, mock.Anything).Return(
+		types.KubernetesResult{Available: true}, nil)
+	env.OnActivity(enrichAct.QueryLoki, mock.Anything, mock.Anything, mock.Anything).Return(
+		types.LokiResult{Available: true}, nil)
+	env.OnActivity(agentAct.InvokeTriageAgent, mock.Anything, mock.Anything, mock.Anything).Return(
+		types.TriageReport{Classification: "Test", Severity: "warning", RootCause: "test"}, nil)
+	env.OnActivity(reportAct.StoreTriageReport, mock.Anything, mock.Anything).Return(nil)
+
+	params := types.TriageParams{
+		Identity: types.IncidentIdentity{Namespace: "ns", Kind: "Deployment", Name: "app", AlertName: "Test"},
+	}
+	env.ExecuteWorkflow(TriageWorkflow, params)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	// Query after completion should return "complete"
+	encoded, err := env.QueryWorkflow(StatusQueryName)
+	require.NoError(t, err)
+	var status WorkflowStatus
+	require.NoError(t, encoded.Get(&status))
+	require.Equal(t, "complete", status.Step)
+	require.Equal(t, 1, status.AlertCount)
+	require.False(t, status.Resolved)
+}

@@ -208,6 +208,7 @@ func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity typ
 		TaskQueue:                h.taskQueue,
 		WorkflowExecutionTimeout: 15 * time.Minute,
 		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 	}
 
 	// Signal each alert individually to the workflow
