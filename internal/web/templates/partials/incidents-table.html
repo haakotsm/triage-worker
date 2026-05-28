@@ -32,7 +32,7 @@
           {{range .Incidents}}
           <tr class="hover cursor-pointer" tabindex="0" role="link"
               hx-get="/incidents/{{workflowPath .WorkflowID}}" hx-target="#main-content" hx-push-url="true"
-              hx-trigger="click, keyup[key=='Enter']">
+              hx-trigger="click, keyup[key=='Enter']" hx-include="unset">
             <td>
               <div class="flex items-center gap-2">
                 {{if eq .State "correlating"}}
@@ -58,7 +58,7 @@
           {{range .Reports}}
           <tr class="hover cursor-pointer" tabindex="0" role="link"
               hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true"
-              hx-trigger="click, keyup[key=='Enter']">
+              hx-trigger="click, keyup[key=='Enter']" hx-include="unset">
             <td>
               <div class="flex items-center gap-2">
                 <span class="text-success">✓</span>

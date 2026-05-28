@@ -46,21 +46,18 @@
 
     {{/* Left column: Understanding — 3 of 5 columns */}}
     <div class="lg:col-span-3 flex flex-col gap-4">
-      {{/* Summary */}}
-      {{if .Report.Summary}}
+      {{/* Summary + Root Cause combined */}}
       <div class="card bg-base-100 shadow">
         <div class="card-body">
+          {{if .Report.Summary}}
           <h3 class="font-semibold">Summary</h3>
-          <p class="break-words">{{.Report.Summary}}</p>
-        </div>
-      </div>
-      {{end}}
-
-      {{/* Root Cause */}}
-      <div class="card bg-base-100 shadow">
-        <div class="card-body">
+          <p class="break-words whitespace-pre-line">{{.Report.Summary}}</p>
+          {{end}}
+          {{if and .Report.Summary .Report.RootCause}}<div class="divider my-2"></div>{{end}}
+          {{if .Report.RootCause}}
           <h3 class="font-semibold">Root Cause</h3>
-          <p>{{.Report.RootCause}}</p>
+          <p class="break-words whitespace-pre-line">{{.Report.RootCause}}</p>
+          {{end}}
         </div>
       </div>
 
@@ -118,11 +115,15 @@
             <h3 class="font-semibold">L1 Diagnostic Commands</h3>
             <button class="btn btn-sm btn-primary"
                     @click="
-                      const cmds = [...document.querySelectorAll('[data-l1-cmd]')]
+                      const card = $el.closest('.card');
+                      const cmds = [...card.querySelectorAll('[data-l1-cmd]')]
                         .map(el => el.textContent.trim()).join('\n');
-                      navigator.clipboard.writeText(cmds);
-                      copied = true;
-                      setTimeout(() => copied = false, 2000);
+                      if (navigator.clipboard) {
+                        navigator.clipboard.writeText(cmds).then(() => { copied = true; setTimeout(() => copied = false, 2000); });
+                      } else {
+                        const ta = document.createElement('textarea'); ta.value = cmds; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+                        copied = true; setTimeout(() => copied = false, 2000);
+                      }
                     ">
               <span x-show="!copied">📋 Copy All</span>
               <span x-show="copied" x-cloak>✅ Copied!</span>
@@ -140,7 +141,15 @@
                   {{end}}
                 </div>
                 <button class="btn btn-xs btn-ghost"
-                        @click="navigator.clipboard.writeText($el.closest('[x-data]').querySelector('[data-l1-cmd]').textContent.trim()); cmdCopied = true; setTimeout(() => cmdCopied = false, 1500)">
+                        @click="
+                          const cmd = $el.closest('.bg-base-200').querySelector('[data-l1-cmd]').textContent.trim();
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText(cmd).then(() => { cmdCopied = true; setTimeout(() => cmdCopied = false, 1500); });
+                          } else {
+                            const ta = document.createElement('textarea'); ta.value = cmd; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+                            cmdCopied = true; setTimeout(() => cmdCopied = false, 1500);
+                          }
+                        ">
                   <span x-show="!cmdCopied">📋</span>
                   <span x-show="cmdCopied" x-cloak>✅</span>
                 </button>
