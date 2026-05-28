@@ -100,8 +100,9 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 }
 
 // UpdateIncidentState transitions a report's lifecycle state.
-// Valid states: correlating, enriching, triaging, reported, resolved.
+// Valid states: correlating, enriching, triaging, reported, resolved, failed.
 // State can only move forward (monotonic) to prevent backward transitions from retries.
+// 'failed' is a terminal state that can be reached from any non-terminal state.
 func (r *ReportActivity) UpdateIncidentState(ctx context.Context, workflowID, state, severity string) error {
 	if r.DB == nil {
 		return nil
@@ -115,6 +116,7 @@ func (r *ReportActivity) UpdateIncidentState(ctx context.Context, workflowID, st
 		     WHEN 'triaging'    THEN 3
 		     WHEN 'reported'    THEN 4
 		     WHEN 'resolved'    THEN 5
+		     WHEN 'failed'      THEN 6
 		     ELSE 0
 		   END < CASE $2::text
 		     WHEN 'correlating' THEN 1
@@ -122,6 +124,7 @@ func (r *ReportActivity) UpdateIncidentState(ctx context.Context, workflowID, st
 		     WHEN 'triaging'    THEN 3
 		     WHEN 'reported'    THEN 4
 		     WHEN 'resolved'    THEN 5
+		     WHEN 'failed'      THEN 6
 		     ELSE 0
 		   END`,
 		workflowID, state, severity,
@@ -201,10 +204,10 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		-- Enforce valid lifecycle states.
 		-- Clean up any invalid state values first.
 		UPDATE triage.reports SET state = 'reported'
-			WHERE state NOT IN ('correlating','enriching','triaging','reported','resolved');
+			WHERE state NOT IN ('correlating','enriching','triaging','reported','resolved','failed');
 		DO $$ BEGIN
 			ALTER TABLE triage.reports ADD CONSTRAINT chk_state
-				CHECK (state IN ('correlating','enriching','triaging','reported','resolved'));
+				CHECK (state IN ('correlating','enriching','triaging','reported','resolved','failed'));
 		EXCEPTION WHEN duplicate_object THEN NULL;
 		END $$;
 

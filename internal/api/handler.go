@@ -100,6 +100,13 @@ func (h *Handler) listReports(w http.ResponseWriter, r *http.Request) {
 	args := []interface{}{}
 	argIdx := 1
 
+	if v := q.Get("state"); v != "" {
+		query += " AND state = $" + strconv.Itoa(argIdx)
+		args = append(args, v)
+		argIdx++
+	} else if q.Get("include_failed") != "true" {
+		query += " AND state != 'failed'"
+	}
 	if v := q.Get("severity"); v != "" {
 		query += " AND severity = $" + strconv.Itoa(argIdx)
 		args = append(args, v)
