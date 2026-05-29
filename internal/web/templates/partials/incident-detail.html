@@ -115,8 +115,8 @@
            this.saveDone();
          },
          isDone(idx) { return this.done.includes(idx); },
-         async copyCmd(idx, el) {
-           const cmd = el.textContent.trim();
+         async copyCmd(idx, stepEl) {
+           const cmd = stepEl.closest('[data-l1-step]').dataset.cmd;
            await this.clipWrite(cmd);
            this.copied = idx;
            setTimeout(() => this.copied = null, 2000);
@@ -170,7 +170,7 @@
             {{/* Step number / completion toggle */}}
             <button class="flex-none w-11 flex items-center justify-center border-r border-base-300 cursor-pointer select-none transition-colors"
                     :class="isDone({{$i}}) ? 'bg-success/20 text-success' : 'bg-base-300/50 text-base-content/50 hover:text-primary hover:bg-primary/10'"
-                    @click="toggleDone({{$i}})"
+                    @click.stop="toggleDone({{$i}})"
                     :title="isDone({{$i}}) ? 'Mark as not done' : 'Mark as done'"
                     :aria-label="isDone({{$i}}) ? 'Step {{add $i 1}} complete, click to undo' : 'Mark step {{add $i 1}} as done'">
               <span class="font-bold text-sm" x-show="!isDone({{$i}})">{{add $i 1}}</span>
@@ -179,23 +179,22 @@
 
             {{/* Command content — click to copy */}}
             <div class="flex-1 p-3 min-w-0 cursor-copy"
-                 @click="copyCmd({{$i}}, $el.querySelector('[data-l1-cmd]'))"
+                 @click="copyCmd({{$i}}, $el)"
                  title="Click to copy command">
               <div class="flex justify-between items-start gap-2">
                 <div class="flex-1 min-w-0">
                   <p class="text-xs font-medium text-base-content/70 mb-1">{{$cmd.Action}}</p>
-                  <code class="font-mono text-sm block overflow-x-auto whitespace-pre transition-colors"
-                        :class="copied === {{$i}} ? 'text-success font-semibold' : ''"
-                        data-l1-cmd>
+                  <code class="font-mono text-sm bg-base-300 rounded-lg p-2 block overflow-x-auto whitespace-pre border border-base-content/10 transition-colors"
+                        :class="copied === {{$i}} ? 'text-success border-success/30 bg-success/10' : ''">
                     <span x-show="copied !== {{$i}}">{{$cmd.Command}}</span>
                     <span x-show="copied === {{$i}}" x-cloak>✅ Copied to clipboard</span>
                   </code>
                 </div>
-                <span class="text-xs text-base-content/30 shrink-0 mt-0.5 select-none"
+                <span class="text-xs text-base-content/30 shrink-0 mt-1 select-none hidden sm:inline"
                       x-show="copied !== {{$i}}">click to copy</span>
               </div>
               {{if $cmd.Expected}}
-              <details class="mt-2">
+              <details class="mt-2" @click.stop>
                 <summary class="text-xs cursor-pointer text-success/80 hover:text-success transition-colors flex items-center gap-1 select-none">
                   ✓ What to expect
                 </summary>
