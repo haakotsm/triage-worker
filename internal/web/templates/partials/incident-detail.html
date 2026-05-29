@@ -105,7 +105,7 @@
     <div class="lg:col-span-3 flex flex-col gap-3 order-2 lg:order-1">
 
       {{if gt (len .Report.CausalChain) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow">
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold text-sm py-2 min-h-0">
           Causal Chain
           <span class="badge badge-ghost badge-sm ml-1">{{len .Report.CausalChain}}</span>
@@ -121,7 +121,7 @@
       {{end}}
 
       {{if gt (len .Report.Evidence) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow">
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold text-sm py-2 min-h-0">
           Evidence
           <span class="badge badge-ghost badge-sm ml-1">{{len .Report.Evidence}}</span>
@@ -146,7 +146,7 @@
       {{end}}
 
       {{if .AgentRecs}}
-      <details class="collapse collapse-arrow bg-base-100 shadow">
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold text-sm py-2 min-h-0">
           Recommendations
           <span class="badge badge-ghost badge-sm ml-1">{{len .AgentRecs}}</span>
@@ -160,7 +160,7 @@
                 <span class="badge badge-xs {{riskClass .Risk}}">{{.Risk}}</span>
               </div>
               {{if .Command}}
-              <code class="font-mono text-[11px] bg-base-300 p-1.5 rounded block overflow-x-auto mt-1 whitespace-pre">{{.Command}}</code>
+              <code class="font-mono text-xs bg-base-300 p-1.5 rounded block overflow-x-auto mt-1 whitespace-pre">{{.Command}}</code>
               {{end}}
             </div>
             {{end}}
@@ -209,7 +209,7 @@
         <div class="card-body p-3">
           <div class="flex justify-between items-center mb-2">
             <h3 class="font-bold text-sm flex items-center gap-1.5">
-              <span class="text-primary">▶</span> Runbook
+              Diagnostic Runbook
               <span class="badge badge-primary badge-xs" x-show="done.length > 0" x-cloak
                     x-text="done.length + '/{{len .L1Commands}}'"></span>
             </h3>
@@ -219,14 +219,14 @@
             </button>
           </div>
 
-          <div class="overflow-y-auto max-h-[250px] rounded-lg border border-base-content/10 bg-base-200 divide-y divide-base-content/5">
+          <div class="overflow-y-auto max-h-[280px] rounded-lg border border-base-content/10 bg-base-200 divide-y divide-base-content/5">
             {{range $i, $cmd := .L1Commands}}
-            <div class="flex items-center h-9 group transition-colors duration-100"
+            <div class="flex items-center h-11 group transition-colors duration-100"
                  :class="isDone({{$i}}) ? 'opacity-40 bg-base-200' : 'hover:bg-base-300/60'"
                  data-l1-step
                  data-action="{{$cmd.Action}}"
                  data-cmd="{{$cmd.Command}}">
-              <button class="flex-none w-8 h-9 flex items-center justify-center text-xs font-bold select-none transition-colors border-r border-base-content/5"
+              <button class="flex-none w-8 h-11 flex items-center justify-center text-xs font-bold select-none transition-colors border-r border-base-content/5"
                       :class="isDone({{$i}}) ? 'text-success bg-success/10' : 'text-base-content/40 hover:text-primary hover:bg-primary/5'"
                       @click.stop="toggleDone({{$i}})"
                       :title="isDone({{$i}}) ? 'Mark undone' : 'Mark done'">
@@ -242,7 +242,7 @@
                   <span x-show="copied === {{$i}}" x-cloak>✅ Copied</span>
                 </code>
               </div>
-              <button class="flex-none w-8 h-9 flex items-center justify-center text-base-content/30 opacity-0 group-hover:opacity-100 transition-opacity cursor-copy"
+              <button class="flex-none w-8 h-11 flex items-center justify-center text-base-content/30 opacity-0 group-hover:opacity-100 transition-opacity cursor-copy"
                       @click="copyCmd({{$i}}, $el)"
                       aria-label="Copy command {{add $i 1}}">
                 <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
