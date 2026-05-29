@@ -102,6 +102,123 @@
     </div>
   </div>
 
+  {{/* ── Diagnostic Runbook (full-width, promoted above analysis) ── */}}
+  {{if .L1Commands}}
+  <div class="card bg-base-100 shadow-lg border-t-4 border-primary"
+       x-data="{
+         copied: null,
+         done: JSON.parse(localStorage.getItem('runbook-{{.Report.ID}}') || '[]'),
+         saveDone() { localStorage.setItem('runbook-{{.Report.ID}}', JSON.stringify(this.done)); },
+         toggleDone(idx) {
+           const i = this.done.indexOf(idx);
+           if (i === -1) { this.done.push(idx); } else { this.done.splice(i, 1); }
+           this.saveDone();
+         },
+         isDone(idx) { return this.done.includes(idx); },
+         async copyCmd(idx, el) {
+           const cmd = el.textContent.trim();
+           await this.clipWrite(cmd);
+           this.copied = idx;
+           setTimeout(() => this.copied = null, 2000);
+         },
+         async copyScript() {
+           const steps = [...this.$el.querySelectorAll('[data-l1-step]')];
+           const script = '#!/bin/bash\nset -euo pipefail\n\n' + steps.map(s => {
+             return '# ' + s.dataset.action + '\n' + s.dataset.cmd;
+           }).join('\n\n') + '\n';
+           await this.clipWrite(script);
+           this.copied = 'script';
+           setTimeout(() => this.copied = null, 2500);
+         },
+         async clipWrite(text) {
+           if (navigator.clipboard) { await navigator.clipboard.writeText(text); }
+           else { const ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+         }
+       }">
+    <div class="card-body p-4">
+      {{/* Header */}}
+      <div class="flex justify-between items-center flex-wrap gap-2 mb-3">
+        <div>
+          <h3 class="font-bold text-base flex items-center gap-2">
+            <span class="text-primary">▶</span> Diagnostic Runbook
+          </h3>
+          <p class="text-xs text-base-content/50 mt-0.5">
+            Run these in order · {{len .L1Commands}} commands · all read-only
+          </p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-base-content/50" x-show="done.length > 0" x-cloak>
+            <span x-text="done.length"></span>/{{len .L1Commands}} done
+          </span>
+          <button class="btn btn-sm btn-primary gap-1" @click="copyScript()">
+            <span x-show="copied !== 'script'">⚡ Copy as Script</span>
+            <span x-show="copied === 'script'" x-cloak>✅ Copied!</span>
+          </button>
+        </div>
+      </div>
+
+      {{/* Command Steps */}}
+      <ol class="flex flex-col gap-2">
+        {{range $i, $cmd := .L1Commands}}
+        <li class="relative rounded-xl transition-all duration-150"
+            :class="isDone({{$i}}) ? 'opacity-50' : ''"
+            data-l1-step
+            data-action="{{$cmd.Action}}"
+            data-cmd="{{$cmd.Command}}">
+          <div class="flex items-stretch rounded-xl overflow-hidden"
+               :class="isDone({{$i}}) ? 'bg-base-200/50' : 'bg-base-200 hover:bg-base-300/50'">
+            {{/* Step number / completion toggle */}}
+            <button class="flex-none w-11 flex items-center justify-center border-r border-base-300 cursor-pointer select-none transition-colors"
+                    :class="isDone({{$i}}) ? 'bg-success/20 text-success' : 'bg-base-300/50 text-base-content/50 hover:text-primary hover:bg-primary/10'"
+                    @click="toggleDone({{$i}})"
+                    :title="isDone({{$i}}) ? 'Mark as not done' : 'Mark as done'"
+                    :aria-label="isDone({{$i}}) ? 'Step {{add $i 1}} complete, click to undo' : 'Mark step {{add $i 1}} as done'">
+              <span class="font-bold text-sm" x-show="!isDone({{$i}})">{{add $i 1}}</span>
+              <span x-show="isDone({{$i}})" x-cloak>✓</span>
+            </button>
+
+            {{/* Command content — click to copy */}}
+            <div class="flex-1 p-3 min-w-0 cursor-copy"
+                 @click="copyCmd({{$i}}, $el.querySelector('[data-l1-cmd]'))"
+                 title="Click to copy command">
+              <div class="flex justify-between items-start gap-2">
+                <div class="flex-1 min-w-0">
+                  <p class="text-xs font-medium text-base-content/70 mb-1">{{$cmd.Action}}</p>
+                  <code class="font-mono text-sm block overflow-x-auto whitespace-pre transition-colors"
+                        :class="copied === {{$i}} ? 'text-success font-semibold' : ''"
+                        data-l1-cmd>
+                    <span x-show="copied !== {{$i}}">{{$cmd.Command}}</span>
+                    <span x-show="copied === {{$i}}" x-cloak>✅ Copied to clipboard</span>
+                  </code>
+                </div>
+                <span class="text-xs text-base-content/30 shrink-0 mt-0.5 select-none"
+                      x-show="copied !== {{$i}}">click to copy</span>
+              </div>
+              {{if $cmd.Expected}}
+              <details class="mt-2">
+                <summary class="text-xs cursor-pointer text-success/80 hover:text-success transition-colors flex items-center gap-1 select-none">
+                  ✓ What to expect
+                </summary>
+                <p class="text-xs mt-1 ml-4 p-2 rounded-md bg-success/10 text-base-content/80 border border-success/20">
+                  {{$cmd.Expected}}
+                </p>
+              </details>
+              {{end}}
+            </div>
+          </div>
+        </li>
+        {{end}}
+      </ol>
+
+      {{/* Footer hint */}}
+      <p class="text-xs text-base-content/40 mt-3 text-center select-none">
+        Click any command to copy · Click step number to mark done
+      </p>
+    </div>
+  </div>
+  {{end}}
+
+  {{/* ── Analysis: 2-column grid ── */}}
   <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
     <div class="lg:col-span-3 flex flex-col gap-4">
       {{if .Report.RootCause}}
@@ -150,41 +267,6 @@
     </div>
 
     <div class="lg:col-span-2 flex flex-col gap-4">
-      {{if .L1Commands}}
-      <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="{ copied: false }">
-        <div class="card-body">
-          <div class="flex justify-between items-center">
-            <h3 class="font-semibold">L1 Diagnostic Commands</h3>
-            <button class="btn btn-sm btn-primary"
-                    @click="const card=$el.closest('.card'); const cmds=[...card.querySelectorAll('[data-l1-cmd]')].map(el=>el.textContent.trim()).join('\n'); if(navigator.clipboard){navigator.clipboard.writeText(cmds).then(()=>{copied=true;setTimeout(()=>copied=false,2000)})}else{const ta=document.createElement('textarea');ta.value=cmds;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);copied=true;setTimeout(()=>copied=false,2000)}">
-              <span x-show="!copied">📋 Copy All</span>
-              <span x-show="copied" x-cloak>✅ Copied!</span>
-            </button>
-          </div>
-          <div class="flex flex-col gap-2 mt-2">
-            {{range .L1Commands}}
-            <div class="bg-base-200 rounded-lg p-3" x-data="{ cmdCopied: false }">
-              <div class="flex justify-between items-start gap-2">
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm mb-1">{{.Action}}</p>
-                  <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-l1-cmd>{{.Command}}</code>
-                  {{if .Expected}}
-                  <p class="text-xs text-base-content/60 mt-1">→ Expected: {{.Expected}}</p>
-                  {{end}}
-                </div>
-                <button class="btn btn-xs btn-ghost"
-                        @click="const cmd=$el.closest('.bg-base-200').querySelector('[data-l1-cmd]').textContent.trim(); if(navigator.clipboard){navigator.clipboard.writeText(cmd).then(()=>{cmdCopied=true;setTimeout(()=>cmdCopied=false,1500)})}else{const ta=document.createElement('textarea');ta.value=cmd;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);cmdCopied=true;setTimeout(()=>cmdCopied=false,1500)}">
-                  <span x-show="!cmdCopied">📋</span>
-                  <span x-show="cmdCopied" x-cloak>✅</span>
-                </button>
-              </div>
-            </div>
-            {{end}}
-          </div>
-        </div>
-      </div>
-      {{end}}
-
       {{if .AgentRecs}}
       <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold">Agent Recommendations ({{len .AgentRecs}})</summary>
