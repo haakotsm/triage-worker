@@ -1,16 +1,16 @@
 {
   "version": "4",
-  "groupKey": "{}/{}:{alertname=\"KubePodNotReady\", namespace=\"default\"}",
+  "groupKey": "{}/{}:{alertname=\"KubePodNotReady\", namespace=\"bibliotek\"}",
   "truncatedAlerts": 0,
   "status": "firing",
   "receiver": "triage-webhook",
   "groupLabels": {
     "alertname": "KubePodNotReady",
-    "namespace": "default"
+    "namespace": "bibliotek"
   },
   "commonLabels": {
     "alertname": "KubePodNotReady",
-    "namespace": "default",
+    "namespace": "bibliotek",
     "severity": "warning",
     "deployment": "frontend"
   },
@@ -25,7 +25,7 @@
       "labels": {
         "alertname": "KubePodNotReady",
         "container": "frontend",
-        "namespace": "default",
+        "namespace": "bibliotek",
         "pod": "frontend-8d7c6f5e3-p4n2m",
         "deployment": "frontend",
         "severity": "warning"

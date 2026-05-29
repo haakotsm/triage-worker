@@ -1,16 +1,16 @@
 {
   "version": "4",
-  "groupKey": "{}/{}:{alertname=\"KubeContainerOOMKilled\", namespace=\"default\"}",
+  "groupKey": "{}/{}:{alertname=\"KubeContainerOOMKilled\", namespace=\"bibliotek\"}",
   "truncatedAlerts": 0,
   "status": "firing",
   "receiver": "triage-webhook",
   "groupLabels": {
     "alertname": "KubeContainerOOMKilled",
-    "namespace": "default"
+    "namespace": "bibliotek"
   },
   "commonLabels": {
     "alertname": "KubeContainerOOMKilled",
-    "namespace": "default",
+    "namespace": "bibliotek",
     "severity": "warning",
     "deployment": "members-api"
   },
@@ -25,7 +25,7 @@
       "labels": {
         "alertname": "KubeContainerOOMKilled",
         "container": "members-api",
-        "namespace": "default",
+        "namespace": "bibliotek",
         "pod": "members-api-5f8c9d6b2-m3j7k",
         "deployment": "members-api",
         "severity": "warning"

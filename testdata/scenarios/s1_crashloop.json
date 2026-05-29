@@ -1,21 +1,21 @@
 {
   "version": "4",
-  "groupKey": "{}/{}:{alertname=\"KubePodCrashLooping\", namespace=\"default\"}",
+  "groupKey": "{}/{}:{alertname=\"KubePodCrashLooping\", namespace=\"bibliotek\"}",
   "truncatedAlerts": 0,
   "status": "firing",
   "receiver": "triage-webhook",
   "groupLabels": {
     "alertname": "KubePodCrashLooping",
-    "namespace": "default"
+    "namespace": "bibliotek"
   },
   "commonLabels": {
     "alertname": "KubePodCrashLooping",
-    "namespace": "default",
+    "namespace": "bibliotek",
     "severity": "critical",
     "deployment": "catalog-api"
   },
   "commonAnnotations": {
-    "description": "Pod default/catalog-api-7d8b9f6c4-x2k9j has restarted 5 times in the last 15 minutes",
+    "description": "Pod bibliotek/catalog-api-7d8b9f6c4-x2k9j has restarted 5 times in the last 15 minutes",
     "summary": "Pod is crash looping"
   },
   "externalURL": "http://alertmanager.monitoring.svc:9093",
@@ -25,13 +25,13 @@
       "labels": {
         "alertname": "KubePodCrashLooping",
         "container": "catalog-api",
-        "namespace": "default",
+        "namespace": "bibliotek",
         "pod": "catalog-api-7d8b9f6c4-x2k9j",
         "deployment": "catalog-api",
         "severity": "critical"
       },
       "annotations": {
-        "description": "Pod default/catalog-api-7d8b9f6c4-x2k9j (catalog-api) is in waiting state (reason: CrashLoopBackOff)",
+        "description": "Pod bibliotek/catalog-api-7d8b9f6c4-x2k9j (catalog-api) is in waiting state (reason: CrashLoopBackOff)",
         "summary": "Pod is crash looping"
       },
       "startsAt": "2024-01-15T10:00:00.000Z",

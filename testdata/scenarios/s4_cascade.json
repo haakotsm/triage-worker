@@ -1,14 +1,14 @@
 {
   "version": "4",
-  "groupKey": "{}/{}:{namespace=\"default\"}",
+  "groupKey": "{}/{}:{namespace=\"bibliotek\"}",
   "truncatedAlerts": 0,
   "status": "firing",
   "receiver": "triage-webhook",
   "groupLabels": {
-    "namespace": "default"
+    "namespace": "bibliotek"
   },
   "commonLabels": {
-    "namespace": "default",
+    "namespace": "bibliotek",
     "severity": "critical"
   },
   "commonAnnotations": {},
@@ -18,7 +18,7 @@
       "status": "firing",
       "labels": {
         "alertname": "PostgreSQLDown",
-        "namespace": "default",
+        "namespace": "bibliotek",
         "statefulset": "postgresql",
         "pod": "postgresql-0",
         "severity": "critical"
@@ -36,7 +36,7 @@
       "status": "firing",
       "labels": {
         "alertname": "KubePodCrashLooping",
-        "namespace": "default",
+        "namespace": "bibliotek",
         "deployment": "catalog-api",
         "pod": "catalog-api-7d8b9f6c4-x2k9j",
         "severity": "critical"
@@ -54,7 +54,7 @@
       "status": "firing",
       "labels": {
         "alertname": "KubePodCrashLooping",
-        "namespace": "default",
+        "namespace": "bibliotek",
         "deployment": "members-api",
         "pod": "members-api-5f8c9d6b2-m3j7k",
         "severity": "critical"
@@ -72,7 +72,7 @@
       "status": "firing",
       "labels": {
         "alertname": "HighErrorRate",
-        "namespace": "default",
+        "namespace": "bibliotek",
         "deployment": "api-gateway",
         "pod": "api-gateway-3a4b5c6d7-q8r9s",
         "severity": "warning"
