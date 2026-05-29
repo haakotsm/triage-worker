@@ -110,14 +110,14 @@ type DashboardData struct {
 	SSEEnabled bool
 }
 
-// DetailData is the template data for the report detail page.
+// DetailData is the template data for the unified incident detail page.
 type DetailData struct {
 	Report     Report
 	L1Commands []Recommendation
 	AgentRecs  []Recommendation
-	Incident   *Incident
 	LiveStatus triageworkflow.WorkflowStatus
 	SSEEnabled bool
+	IsComplete bool
 }
 
 // Handler serves the web dashboard and static assets.
@@ -207,11 +207,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/partials/incidents":
 		h.handlePartialIncidents(w, r)
 	case strings.HasPrefix(r.URL.Path, "/incidents/") && strings.HasSuffix(r.URL.Path, "/status"):
-		h.handleIncidentStatus(w, r)
+		h.handleIncidentStatusPoll(w, r)
 	case strings.HasPrefix(r.URL.Path, "/incidents/"):
-		h.handleIncident(w, r)
+		h.handleIncidentDetail(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
-		h.handleDetail(w, r)
+		h.handleReportRedirect(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -256,17 +256,21 @@ func (h *Handler) handlePartialStats(w http.ResponseWriter, r *http.Request) {
 	h.render(w, "stats-panel", stats)
 }
 
-func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/reports/")
-	if idStr == "" {
-		http.Redirect(w, r, "/", http.StatusFound)
+func (h *Handler) handleIncidentDetail(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/incidents/")
+	idStr = strings.TrimSuffix(idStr, "/status")
+	idStr = strings.Trim(idStr, "/")
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
 		return
 	}
 
-	report, err := h.fetchReport(r.Context(), idStr)
+	report, err := h.fetchReportByID(r.Context(), id)
 	if err != nil {
-		h.logger.Error("fetch report", "error", err, "id", idStr)
-		h.renderError(w, "Failed to load report")
+		h.logger.Error("fetch incident detail", "error", err, "id", id)
+		h.renderError(w, "Failed to load incident")
 		return
 	}
 	if report == nil {
@@ -274,110 +278,85 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var l1 []Recommendation
-	var agent []Recommendation
-	for _, rec := range report.Recommendations {
-		if rec.Source == "l1" {
-			l1 = append(l1, rec)
-		} else {
-			agent = append(agent, rec)
-		}
-	}
-
-	data := DetailData{
-		Report:     *report,
-		L1Commands: l1,
-		AgentRecs:  agent,
-	}
+	data := h.buildIncidentDetailData(r.Context(), *report)
 
 	if isHTMX(r) {
-		h.render(w, "report-detail", data)
+		h.render(w, "incident-detail", data)
 	} else {
 		h.render(w, "detail", data)
 	}
 }
 
-func (h *Handler) handleIncident(w http.ResponseWriter, r *http.Request) {
-	workflowID := decodeWorkflowPath(strings.TrimPrefix(r.URL.Path, "/incidents/"))
-	if workflowID == "" {
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
+func (h *Handler) handleIncidentStatusPoll(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/incidents/")
+	idStr = strings.TrimSuffix(idStr, "/status")
+	idStr = strings.Trim(idStr, "/")
 
-	data, redirectURL, found, err := h.loadIncidentLiveData(r.Context(), workflowID)
+	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		h.logger.Error("fetch incident", "error", err, "workflow_id", workflowID)
-		h.renderError(w, "Failed to load incident")
-		return
-	}
-	if !found {
 		http.NotFound(w, r)
 		return
 	}
-	if redirectURL != "" {
-		redirectRequest(w, r, redirectURL)
-		return
-	}
 
-	if isHTMX(r) {
-		h.render(w, "incident-live", data)
-	} else {
-		h.render(w, "detail", data)
-	}
-}
-
-func (h *Handler) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
-	rawID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/incidents/"), "/status")
-	workflowID := decodeWorkflowPath(rawID)
-	if workflowID == "" {
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
-	if !isHTMX(r) {
-		http.Redirect(w, r, "/incidents/"+encodeWorkflowPath(workflowID), http.StatusFound)
-		return
-	}
-
-	data, redirectURL, found, err := h.loadIncidentLiveData(r.Context(), workflowID)
+	report, err := h.fetchReportByID(r.Context(), id)
 	if err != nil {
-		h.logger.Error("fetch incident status", "error", err, "workflow_id", workflowID)
+		h.logger.Error("fetch incident status", "error", err, "id", id)
 		h.renderError(w, "Failed to load incident status")
 		return
 	}
-	if !found {
+	if report == nil {
 		http.NotFound(w, r)
 		return
 	}
-	if redirectURL != "" {
-		redirectRequest(w, r, redirectURL)
+
+	data := h.buildIncidentDetailData(r.Context(), *report)
+	if data.IsComplete {
+		h.render(w, "incident-complete", data)
 		return
 	}
-
-	h.render(w, "incident-live-panel", data)
+	h.render(w, "incident-progress", data)
 }
 
-func (h *Handler) loadIncidentLiveData(ctx context.Context, workflowID string) (DetailData, string, bool, error) {
-	incident, err := h.fetchIncident(ctx, workflowID)
-	if err != nil {
-		return DetailData{}, "", false, err
+func (h *Handler) handleReportRedirect(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.Trim(strings.TrimPrefix(r.URL.Path, "/reports/"), "/")
+	if _, err := strconv.ParseInt(idStr, 10, 64); err != nil {
+		http.NotFound(w, r)
+		return
 	}
-	if incident == nil {
-		return DetailData{}, "", false, nil
-	}
-	if isTerminalIncidentState(incident.State) {
-		return DetailData{}, reportPath(incident.ID), true, nil
-	}
+	http.Redirect(w, r, "/incidents/"+idStr, http.StatusMovedPermanently)
+}
 
-	status := h.queryWorkflowStatus(ctx, *incident)
-	if status.Step == "complete" {
-		return DetailData{}, reportPath(incident.ID), true, nil
-	}
-
-	return DetailData{
-		Incident:   incident,
-		LiveStatus: status,
+func (h *Handler) buildIncidentDetailData(ctx context.Context, report Report) DetailData {
+	data := DetailData{
+		Report:     report,
 		SSEEnabled: h.sse != nil,
-	}, "", true, nil
+	}
+
+	if isTerminalIncidentState(report.State) {
+		data.IsComplete = true
+		for _, rec := range report.Recommendations {
+			if rec.Source == "l1" {
+				data.L1Commands = append(data.L1Commands, rec)
+			} else {
+				data.AgentRecs = append(data.AgentRecs, rec)
+			}
+		}
+		return data
+	}
+
+	incident := Incident{
+		ID:         report.ID,
+		WorkflowID: report.WorkflowID,
+		Namespace:  report.Namespace,
+		Workload:   report.Workload,
+		Kind:       report.Kind,
+		AlertName:  report.AlertName,
+		State:      report.State,
+		Severity:   report.Severity,
+		CreatedAt:  report.CreatedAt,
+	}
+	data.LiveStatus = h.queryWorkflowStatus(ctx, incident)
+	return data
 }
 
 func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
@@ -639,11 +618,8 @@ func (h *Handler) fetchReport(ctx context.Context, idStr string) (*Report, error
 		query += "id = $1"
 		args = []interface{}{id}
 	} else {
-		// Workflow IDs contain slashes (e.g. "triage/ns/Kind/name/alert")
-		// which are encoded as pipes in URL path segments for safe routing.
-		wfID := strings.ReplaceAll(idStr, "|", "/")
 		query += "workflow_id = $1"
-		args = []interface{}{wfID}
+		args = []interface{}{strings.ReplaceAll(idStr, "|", "/")}
 	}
 
 	reports, err := h.queryReports(ctx, query, args...)
@@ -654,6 +630,10 @@ func (h *Handler) fetchReport(ctx context.Context, idStr string) (*Report, error
 		return nil, nil
 	}
 	return &reports[0], nil
+}
+
+func (h *Handler) fetchReportByID(ctx context.Context, id int64) (*Report, error) {
+	return h.fetchReport(ctx, strconv.FormatInt(id, 10))
 }
 
 func (h *Handler) queryReports(ctx context.Context, query string, args ...interface{}) ([]Report, error) {
@@ -818,27 +798,6 @@ func (h *Handler) queryWorkflowStatus(ctx context.Context, incident Incident) tr
 	return live
 }
 
-func encodeWorkflowPath(workflowID string) string {
-	return strings.ReplaceAll(workflowID, "/", "|")
-}
-
-func decodeWorkflowPath(workflowID string) string {
-	return strings.ReplaceAll(strings.Trim(workflowID, "/"), "|", "/")
-}
-
-func reportPath(id int64) string {
-	return "/reports/" + strconv.FormatInt(id, 10)
-}
-
-func redirectRequest(w http.ResponseWriter, r *http.Request, location string) {
-	if isHTMX(r) {
-		w.Header().Set("HX-Redirect", location)
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	http.Redirect(w, r, location, http.StatusFound)
-}
-
 func isTerminalIncidentState(state string) bool {
 	switch state {
 	case "reported", "resolved", "failed":
@@ -993,7 +952,6 @@ func templateFuncs() template.FuncMap {
 		"fmtPct": func(f float64) string {
 			return fmt.Sprintf("%.0f", f)
 		},
-		"workflowPath": encodeWorkflowPath,
 		"stepReached": func(current, target string) bool {
 			return incidentStepRank(current) >= incidentStepRank(target)
 		},

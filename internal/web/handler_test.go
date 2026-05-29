@@ -35,7 +35,6 @@ func (f fakeTemporalClient) QueryWorkflow(ctx context.Context, workflowID, runID
 }
 
 func TestNewHandler_TemplatesParse(t *testing.T) {
-	// Templates should parse even with nil DB (DB is only used at request time)
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
@@ -90,23 +89,17 @@ func TestUnknownPath_Returns404(t *testing.T) {
 	}
 }
 
-func TestIncidentLivePageRendersForInFlightWorkflow(t *testing.T) {
+func TestIncidentDetailReturns200ForInFlightIncident(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New() error = %v", err)
 	}
 	defer db.Close()
 
-	workflowID := "triage/default/Deployment/catalog-api/KubePodCrashLooping"
-	createdAt := time.Now().Add(-2 * time.Minute)
-	rows := sqlmock.NewRows([]string{"id", "workflow_id", "namespace", "workload", "kind", "alert_name", "state", "severity", "created_at", "updated_at"}).
-		AddRow(int64(7), workflowID, "default", "catalog-api", "Deployment", "KubePodCrashLooping", "triaging", "critical", createdAt, createdAt)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at,
-		COALESCE(completed_at, created_at) AS updated_at
-		FROM triage.reports
-		WHERE workflow_id = $1`)).
-		WithArgs(workflowID).
-		WillReturnRows(rows)
+	report := testReport(7, "triaging")
+	mock.ExpectQuery(regexp.QuoteMeta("FROM triage.reports WHERE id = $1")).
+		WithArgs(int64(7)).
+		WillReturnRows(reportRows(report))
 
 	h, err := NewHandler(db, slog.Default())
 	if err != nil {
@@ -114,64 +107,232 @@ func TestIncidentLivePageRendersForInFlightWorkflow(t *testing.T) {
 	}
 	h.SetTemporalClient(fakeTemporalClient{status: triageworkflow.WorkflowStatus{Step: "triaging", AlertCount: 3, ElapsedMs: 120000}})
 
-	req := httptest.NewRequest("GET", "/incidents/"+encodeWorkflowPath(workflowID), nil)
-	req.Header.Set("HX-Request", "true")
+	req := httptest.NewRequest("GET", "/incidents/7", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("GET /incidents/... = %d, want 200", w.Code)
+		t.Fatalf("GET /incidents/7 = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "Live workflow updates every 2 seconds.") {
-		t.Fatalf("expected live incident body, got %q", body)
+	if !strings.Contains(body, "hx-get=\"/incidents/7/status\"") {
+		t.Fatalf("expected polling target in body, got %q", body)
 	}
-	if !strings.Contains(body, "/incidents/"+encodeWorkflowPath(workflowID)+"/status") {
-		t.Fatalf("expected polling endpoint in body, got %q", body)
-	}
-	if !strings.Contains(body, "KubePodCrashLooping") {
-		t.Fatalf("expected alert name in body, got %q", body)
+	if !strings.Contains(body, "In flight") {
+		t.Fatalf("expected in-flight badge in body, got %q", body)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
-func TestIncidentStatusRedirectsToReportWhenTerminal(t *testing.T) {
+func TestIncidentDetailReturns200ForCompletedIncident(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New() error = %v", err)
 	}
 	defer db.Close()
 
-	workflowID := "triage/default/Deployment/catalog-api/KubePodCrashLooping"
-	createdAt := time.Now().Add(-2 * time.Minute)
-	rows := sqlmock.NewRows([]string{"id", "workflow_id", "namespace", "workload", "kind", "alert_name", "state", "severity", "created_at", "updated_at"}).
-		AddRow(int64(9), workflowID, "default", "catalog-api", "Deployment", "KubePodCrashLooping", "reported", "critical", createdAt, createdAt)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at,
-		COALESCE(completed_at, created_at) AS updated_at
-		FROM triage.reports
-		WHERE workflow_id = $1`)).
-		WithArgs(workflowID).
-		WillReturnRows(rows)
+	report := testReport(9, "reported")
+	resolvedAt := time.Now().Add(-5 * time.Minute)
+	report.RootCause = "Pod OOM due to memory leak"
+	report.ResolvedAt = &resolvedAt
+	report.Recommendations = []Recommendation{{Action: "Check logs", Command: "kubectl logs deploy/catalog-api", Source: "l1"}}
+	mock.ExpectQuery(regexp.QuoteMeta("FROM triage.reports WHERE id = $1")).
+		WithArgs(int64(9)).
+		WillReturnRows(reportRows(report))
 
 	h, err := NewHandler(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/incidents/"+encodeWorkflowPath(workflowID)+"/status", nil)
+	req := httptest.NewRequest("GET", "/incidents/9", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /incidents/9 = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Root Cause") || !strings.Contains(body, report.RootCause) {
+		t.Fatalf("expected completed incident analysis in body, got %q", body)
+	}
+	if strings.Contains(body, "hx-get=\"/incidents/9/status\"") {
+		t.Fatalf("expected completed incident page to stop polling, got %q", body)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestIncidentStatusPollReturnsProgressPartialForInFlightIncident(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	report := testReport(11, "triaging")
+	mock.ExpectQuery(regexp.QuoteMeta("FROM triage.reports WHERE id = $1")).
+		WithArgs(int64(11)).
+		WillReturnRows(reportRows(report))
+
+	h, err := NewHandler(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	h.SetTemporalClient(fakeTemporalClient{status: triageworkflow.WorkflowStatus{Step: "triaging", AlertCount: 4, ElapsedMs: 30000}})
+
+	req := httptest.NewRequest("GET", "/incidents/11/status", nil)
 	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("GET /incidents/.../status = %d, want 200", w.Code)
+		t.Fatalf("GET /incidents/11/status = %d, want 200", w.Code)
 	}
-	if got := w.Header().Get("HX-Redirect"); got != "/reports/9" {
-		t.Fatalf("HX-Redirect = %q, want /reports/9", got)
+	body := w.Body.String()
+	if !strings.Contains(body, "hx-trigger=\"every 2s") {
+		t.Fatalf("expected polling trigger in body, got %q", body)
+	}
+	if !strings.Contains(body, "Correlated") {
+		t.Fatalf("expected progress stats in body, got %q", body)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
+}
+
+func TestIncidentStatusPollReturnsCompletePartialForTerminalIncident(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	report := testReport(12, "reported")
+	report.RootCause = "Node pressure evicted critical pod"
+	report.Recommendations = []Recommendation{{Action: "Inspect events", Command: "kubectl get events -n default", Source: "l1"}}
+	mock.ExpectQuery(regexp.QuoteMeta("FROM triage.reports WHERE id = $1")).
+		WithArgs(int64(12)).
+		WillReturnRows(reportRows(report))
+
+	h, err := NewHandler(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/incidents/12/status", nil)
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /incidents/12/status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("HX-Redirect"); got != "" {
+		t.Fatalf("expected no HX-Redirect, got %q", got)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "hx-trigger=") {
+		t.Fatalf("expected completed partial to stop polling, got %q", body)
+	}
+	if !strings.Contains(body, report.RootCause) {
+		t.Fatalf("expected completed partial content, got %q", body)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestReportRedirectsToUnifiedIncidentPath(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/reports/15", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("GET /reports/15 = %d, want 301", w.Code)
+	}
+	if got := w.Header().Get("Location"); got != "/incidents/15" {
+		t.Fatalf("Location = %q, want /incidents/15", got)
+	}
+}
+
+func testReport(id int64, state string) Report {
+	now := time.Now().Add(-2 * time.Minute).Round(time.Second)
+	return Report{
+		ID:              id,
+		WorkflowID:      "triage/default/Deployment/catalog-api/KubePodCrashLooping",
+		Namespace:       "default",
+		Workload:        "catalog-api",
+		Kind:            "Deployment",
+		AlertName:       "KubePodCrashLooping",
+		Classification:  "availability",
+		Severity:        "critical",
+		Summary:         "Catalog API is restarting",
+		BlastRadius:     "deployment",
+		State:           state,
+		RootCause:       "",
+		CausalChain:     []string{"Pod restarted", "Readiness probe failed"},
+		Evidence:        []Evidence{{Observation: "CrashLoopBackOff", Source: "kubernetes", Strength: "strong"}},
+		Recommendations: []Recommendation{{Action: "Check rollout", Command: "kubectl rollout status deploy/catalog-api", Source: "agent", Risk: "low"}},
+		Confidence:      87,
+		AlertCount:      2,
+		StartedAt:       now,
+		CreatedAt:       now,
+	}
+}
+
+func reportRows(report Report) *sqlmock.Rows {
+	var completedAt interface{}
+	if report.CompletedAt != nil {
+		completedAt = *report.CompletedAt
+	}
+	var resolvedAt interface{}
+	if report.ResolvedAt != nil {
+		resolvedAt = *report.ResolvedAt
+	}
+	return sqlmock.NewRows([]string{
+		"id", "workflow_id", "namespace", "workload", "kind", "alert_name",
+		"classification", "severity", "root_cause", "causal_chain", "evidence",
+		"recommendations", "confidence", "escalation_needed", "alert_count",
+		"started_at", "completed_at", "created_at", "resolved_at", "summary", "blast_radius", "state",
+	}).AddRow(
+		report.ID,
+		report.WorkflowID,
+		report.Namespace,
+		report.Workload,
+		report.Kind,
+		report.AlertName,
+		report.Classification,
+		report.Severity,
+		report.RootCause,
+		`["Pod restarted","Readiness probe failed"]`,
+		`[{"observation":"CrashLoopBackOff","source":"kubernetes","strength":"strong"}]`,
+		recommendationJSON(report.Recommendations),
+		report.Confidence,
+		report.EscalationNeeded,
+		report.AlertCount,
+		report.StartedAt,
+		completedAt,
+		report.CreatedAt,
+		resolvedAt,
+		report.Summary,
+		report.BlastRadius,
+		report.State,
+	)
+}
+
+func recommendationJSON(recs []Recommendation) string {
+	parts := make([]string, 0, len(recs))
+	for _, rec := range recs {
+		parts = append(parts, `{"action":"`+rec.Action+`","command":"`+rec.Command+`","risk":"`+rec.Risk+`","source":"`+rec.Source+`","expected":"`+rec.Expected+`"}`)
+	}
+	return "[" + strings.Join(parts, ",") + "]"
 }

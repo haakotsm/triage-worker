@@ -31,7 +31,7 @@
         <tbody>
           {{range .Incidents}}
           <tr class="hover cursor-pointer" tabindex="0" role="link"
-              hx-get="/incidents/{{workflowPath .WorkflowID}}" hx-target="#main-content" hx-push-url="true"
+              hx-get="/incidents/{{.ID}}" hx-target="#main-content" hx-push-url="true"
               hx-trigger="click, keyup[key=='Enter']" hx-include="unset">
             <td>
               <div class="flex items-center gap-2">
@@ -57,7 +57,7 @@
 
           {{range .Reports}}
           <tr class="hover cursor-pointer" tabindex="0" role="link"
-              hx-get="/reports/{{.ID}}" hx-target="#main-content" hx-push-url="true"
+              hx-get="/incidents/{{.ID}}" hx-target="#main-content" hx-push-url="true"
               hx-trigger="click, keyup[key=='Enter']" hx-include="unset">
             <td>
               <div class="flex items-center gap-2">

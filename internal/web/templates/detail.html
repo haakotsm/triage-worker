@@ -3,9 +3,5 @@
 {{end}}
 
 {{define "content"}}
-{{if .Incident}}
-{{template "incident-live" .}}
-{{else}}
-{{template "report-detail" .}}
-{{end}}
+{{template "incident-detail" .}}
 {{end}}

@@ -1,14 +1,12 @@
-{{define "report-detail"}}
-<div class="flex flex-col gap-4">
-  {{/* Breadcrumbs */}}
+{{define "incident-detail"}}
+<div class="flex flex-col gap-4" {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}>
   <div class="breadcrumbs text-sm">
     <ul>
       <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
-      <li>Report #{{.Report.ID}}</li>
+      <li>{{.Report.Kind}}/{{.Report.Workload}}</li>
     </ul>
   </div>
 
-  {{/* Header */}}
   <div class="card bg-base-100 shadow">
     <div class="card-body">
       <div class="flex justify-between items-start flex-wrap gap-2">
@@ -20,47 +18,92 @@
           <p class="text-sm text-base-content/60 mt-1">
             Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
             · Alert: {{.Report.AlertName}}
-            · {{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}} blast radius
+            {{if .Report.BlastRadius}}· {{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}} blast radius{{end}}
           </p>
         </div>
         <div class="flex items-center gap-3">
-          <div class="radial-progress text-primary text-xs"
-               style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:3px;"
-               role="progressbar" aria-valuemin="0" aria-valuemax="100"
-               aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
-               aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
-            {{printf "%.0f" .Report.Confidence}}%
-          </div>
-          {{if .Report.ResolvedAt}}
-            <span class="badge badge-success">Resolved {{timeAgo (deref .Report.ResolvedAt)}}</span>
+          {{if .IsComplete}}
+            {{if gt .Report.Confidence 0.0}}
+            <div class="radial-progress text-primary text-xs"
+                 style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:3px;"
+                 role="progressbar">
+              {{printf "%.0f" .Report.Confidence}}%
+            </div>
+            {{end}}
+            {{if .Report.ResolvedAt}}
+              <span class="badge badge-success">Resolved {{timeAgo (deref .Report.ResolvedAt)}}</span>
+            {{else if eq .Report.State "failed"}}
+              <span class="badge badge-error">Failed</span>
+            {{else}}
+              <span class="badge badge-success">Triaged</span>
+            {{end}}
           {{else}}
-            <span class="badge badge-error">Active</span>
+            <span class="badge badge-warning badge-outline gap-1">
+              <span class="loading loading-ring loading-xs"></span> In flight
+            </span>
           {{end}}
         </div>
       </div>
     </div>
   </div>
 
-  {{/* Workflow Progress */}}
+  {{template "incident-content" .}}
+</div>
+{{end}}
+
+{{define "incident-progress"}}
+<div id="incident-content"
+     hx-get="/incidents/{{.Report.ID}}/status"
+     hx-trigger="every 2s{{if .SSEEnabled}}, sse:incident-update, sse:report-update{{end}}"
+     hx-target="this"
+     hx-swap="outerHTML transition:true">
+  <div class="card bg-base-100 shadow">
+    <div class="card-body py-3">
+      <ul class="steps steps-horizontal w-full text-xs">
+        <li class="step {{if stepReached .LiveStatus.Step "correlating"}}step-primary{{end}}">Correlating</li>
+        <li class="step {{if stepReached .LiveStatus.Step "enriching"}}step-primary{{end}}">Enriching</li>
+        <li class="step {{if stepReached .LiveStatus.Step "triaging"}}step-primary{{end}}">Triaging</li>
+        <li class="step {{if stepReached .LiveStatus.Step "complete"}}step-primary{{end}}">Complete</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="stats stats-vertical lg:stats-horizontal shadow bg-base-100"
+       x-data="{ elapsed: {{.LiveStatus.ElapsedMs}}, fmt() { const s = Math.floor(this.elapsed/1000); const m = Math.floor(s/60); return m > 0 ? m+'m '+s%60+'s' : s+'s'; } }">
+    <div class="stat">
+      <div class="stat-title">Elapsed</div>
+      <div class="stat-value text-primary text-2xl" x-text="fmt()"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Alerts</div>
+      <div class="stat-value text-2xl">{{.LiveStatus.AlertCount}}</div>
+      <div class="stat-desc">Correlated</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Started</div>
+      <div class="stat-value text-2xl">{{formatDuration .Report.CreatedAt}}</div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "incident-complete"}}
+<div id="incident-content" class="flex flex-col gap-4">
   <div class="card bg-base-100 shadow">
     <div class="card-body py-3">
       <ul class="steps steps-horizontal w-full text-xs">
         <li class="step step-primary">Correlating</li>
         <li class="step step-primary">Enriching</li>
         <li class="step step-primary">Triaging</li>
-        <li class="step {{if eq .Report.State "reported"}}step-primary{{else if eq .Report.State "resolved"}}step-primary{{else}}step-error{{end}}">
+        <li class="step {{if eq .Report.State "failed"}}step-error{{else}}step-primary{{end}}">
           {{if eq .Report.State "failed"}}Failed{{else}}Complete{{end}}
         </li>
       </ul>
     </div>
   </div>
 
-  {{/* Two-column layout: Understand (left) + Act (right) */}}
   <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
-
-    {{/* Left column: Understanding — 3 of 5 columns */}}
     <div class="lg:col-span-3 flex flex-col gap-4">
-      {{/* Root Cause */}}
       {{if .Report.RootCause}}
       <div class="card bg-base-100 shadow">
         <div class="card-body">
@@ -70,7 +113,6 @@
       </div>
       {{end}}
 
-      {{/* Causal Chain */}}
       {{if gt (len .Report.CausalChain) 0}}
       <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</summary>
@@ -84,20 +126,13 @@
       </details>
       {{end}}
 
-      {{/* Evidence */}}
       {{if gt (len .Report.Evidence) 0}}
       <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</summary>
         <div class="collapse-content">
           <div class="overflow-x-auto">
             <table class="table table-sm">
-              <thead>
-                <tr>
-                  <th>Observation</th>
-                  <th>Source</th>
-                  <th>Strength</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Observation</th><th>Source</th><th>Strength</th></tr></thead>
               <tbody>
                 {{range .Report.Evidence}}
                 <tr>
@@ -114,26 +149,14 @@
       {{end}}
     </div>
 
-    {{/* Right column: Actions — 2 of 5 columns */}}
     <div class="lg:col-span-2 flex flex-col gap-4">
-      {{/* L1 Diagnostic Commands */}}
       {{if .L1Commands}}
       <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="{ copied: false }">
         <div class="card-body">
           <div class="flex justify-between items-center">
             <h3 class="font-semibold">L1 Diagnostic Commands</h3>
             <button class="btn btn-sm btn-primary"
-                    @click="
-                      const card = $el.closest('.card');
-                      const cmds = [...card.querySelectorAll('[data-l1-cmd]')]
-                        .map(el => el.textContent.trim()).join('\n');
-                      if (navigator.clipboard) {
-                        navigator.clipboard.writeText(cmds).then(() => { copied = true; setTimeout(() => copied = false, 2000); });
-                      } else {
-                        const ta = document.createElement('textarea'); ta.value = cmds; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                        copied = true; setTimeout(() => copied = false, 2000);
-                      }
-                    ">
+                    @click="const card=$el.closest('.card'); const cmds=[...card.querySelectorAll('[data-l1-cmd]')].map(el=>el.textContent.trim()).join('\n'); if(navigator.clipboard){navigator.clipboard.writeText(cmds).then(()=>{copied=true;setTimeout(()=>copied=false,2000)})}else{const ta=document.createElement('textarea');ta.value=cmds;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);copied=true;setTimeout(()=>copied=false,2000)}">
               <span x-show="!copied">📋 Copy All</span>
               <span x-show="copied" x-cloak>✅ Copied!</span>
             </button>
@@ -150,15 +173,7 @@
                   {{end}}
                 </div>
                 <button class="btn btn-xs btn-ghost"
-                        @click="
-                          const cmd = $el.closest('.bg-base-200').querySelector('[data-l1-cmd]').textContent.trim();
-                          if (navigator.clipboard) {
-                            navigator.clipboard.writeText(cmd).then(() => { cmdCopied = true; setTimeout(() => cmdCopied = false, 1500); });
-                          } else {
-                            const ta = document.createElement('textarea'); ta.value = cmd; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-                            cmdCopied = true; setTimeout(() => cmdCopied = false, 1500);
-                          }
-                        ">
+                        @click="const cmd=$el.closest('.bg-base-200').querySelector('[data-l1-cmd]').textContent.trim(); if(navigator.clipboard){navigator.clipboard.writeText(cmd).then(()=>{cmdCopied=true;setTimeout(()=>cmdCopied=false,1500)})}else{const ta=document.createElement('textarea');ta.value=cmd;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);cmdCopied=true;setTimeout(()=>cmdCopied=false,1500)}">
                   <span x-show="!cmdCopied">📋</span>
                   <span x-show="cmdCopied" x-cloak>✅</span>
                 </button>
@@ -170,12 +185,9 @@
       </div>
       {{end}}
 
-      {{/* Agent Recommendations */}}
       {{if .AgentRecs}}
       <details class="collapse collapse-arrow bg-base-100 shadow" open>
-        <summary class="collapse-title font-semibold">
-          Agent Recommendations ({{len .AgentRecs}})
-        </summary>
+        <summary class="collapse-title font-semibold">Agent Recommendations ({{len .AgentRecs}})</summary>
         <div class="collapse-content">
           <div class="flex flex-col gap-2">
             {{range .AgentRecs}}
@@ -198,4 +210,12 @@
     </div>
   </div>
 </div>
+{{end}}
+
+{{define "incident-content"}}
+{{if .IsComplete}}
+  {{template "incident-complete" .}}
+{{else}}
+  {{template "incident-progress" .}}
+{{end}}
 {{end}}
