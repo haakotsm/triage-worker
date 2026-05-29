@@ -41,6 +41,20 @@
     </div>
   </div>
 
+  {{/* Workflow Progress */}}
+  <div class="card bg-base-100 shadow">
+    <div class="card-body py-3">
+      <ul class="steps steps-horizontal w-full text-xs">
+        <li class="step step-primary">Correlating</li>
+        <li class="step step-primary">Enriching</li>
+        <li class="step step-primary">Triaging</li>
+        <li class="step {{if eq .Report.State "reported"}}step-primary{{else if eq .Report.State "resolved"}}step-primary{{else}}step-error{{end}}">
+          {{if eq .Report.State "failed"}}Failed{{else}}Complete{{end}}
+        </li>
+      </ul>
+    </div>
+  </div>
+
   {{/* Two-column layout: Understand (left) + Act (right) */}}
   <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
