@@ -2,13 +2,13 @@
 {{- if .IsComplete}}
   {{if gt .Report.Confidence 0.0}}
   <div class="radial-progress text-primary text-[10px]"
-       style="--value:{{printf "%.0f" .Report.Confidence}};--size:2rem;--thickness:2px;"
+       style="--value:{{printf "%.0f" (mulf .Report.Confidence 100.0)}};--size:2rem;--thickness:2px;"
        role="img"
        aria-label="Agent confidence"
-       aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
+       aria-valuenow="{{printf "%.0f" (mulf .Report.Confidence 100.0)}}"
        aria-valuemin="0"
        aria-valuemax="100">
-    <span aria-hidden="true">{{printf "%.0f" .Report.Confidence}}%</span>
+    <span aria-hidden="true">{{printf "%.0f" (mulf .Report.Confidence 100.0)}}%</span>
   </div>
   <span class="text-[10px] text-base-content/60">conf</span>
   {{end}}
@@ -45,6 +45,7 @@
           <div class="flex flex-wrap items-center gap-1.5 mb-1">
             {{if .Report.Severity}}<span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>{{else}}<span class="badge badge-ghost" title="Severity not yet classified">?</span>{{end}}
             {{if and .Report.Classification (ne .Report.Classification "Unknown")}}<span class="badge badge-outline">{{.Report.Classification}}</span>{{end}}
+            {{if .Report.BlastRadius}}<span class="badge {{blastClass .Report.BlastRadius}}" title="Blast radius — scope of impact if this incident worsens">Blast radius: {{.Report.BlastRadius}}</span>{{end}}
             {{if .Report.EscalationNeeded}}<span class="badge badge-error">⚠ Escalate</span>{{end}}
           </div>
           <h1 class="card-title text-lg font-mono">
@@ -54,7 +55,6 @@
           <p class="text-sm text-base-content/60 mt-1">
             {{if .Report.Namespace}}Namespace: <span class="font-mono">{{.Report.Namespace}}</span>{{end}}
             {{if .Report.AlertName}}· Alert: {{.Report.AlertName}}{{if gt .Report.AlertCount 1}} ×{{.Report.AlertCount}}{{end}}{{end}}
-            {{if .Report.BlastRadius}}· {{blastDots .Report.BlastRadius}} <span class="font-mono">{{.Report.BlastRadius}}</span> blast radius{{end}}
           </p>
         </div>
         <div id="incident-header-status" class="flex items-center gap-2" aria-live="polite" aria-atomic="true">

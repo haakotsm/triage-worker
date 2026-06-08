@@ -27,13 +27,13 @@ type WorkflowStatus struct {
 	Resolved   bool   `json:"resolved"`
 }
 
-// TriageWorkflow orchestrates alert correlation, enrichment, and AI diagnosis.
+// TriageWorkflow orchestrates alert correlation, multi-agent investigation, and AI diagnosis.
 //
 // Lifecycle:
 //  1. Receives alerts via signals (first alert delivered by SignalWithStart)
 //  2. Correlates: waits for related alerts (60s debounce, 5min hard cap)
-//  3. Enriches: parallel queries to Prometheus, K8s API, Loki
-//  4. Triages: invokes kagent error-triage-agent via A2A protocol
+//  3. Investigates: 3 parallel investigator agents (K8s, Logs, Metrics) each with MCP tools
+//  4. Consolidates: synthesizer agent cross-references findings → TriageReport
 //  5. Reports: stores structured diagnosis to PostgreSQL
 //
 // The workflow also listens for a "resolve" signal. If received at any point
@@ -45,10 +45,8 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 	wfID := workflow.GetInfo(ctx).WorkflowExecution.ID
 
 	// Activity references (nil pointer — Temporal uses method name for dispatch)
-	var enrichAct *activity.Activities
-	var agentAct *activity.AgentActivity
+	var multiAgent *activity.MultiAgentActivity
 	var reportAct *activity.ReportActivity
-	var k8sAct *activity.K8sActivity
 
 	// Short-lived activity options for state updates (non-critical, best-effort).
 	stateOpts := workflow.ActivityOptions{
@@ -121,53 +119,18 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		WorkloadKey.ValueSet(params.Identity.Name),
 	)
 
-	// --- Step 2: Parallel enrichment ---
-	currentStep = "enriching"
+	// --- Step 2: Parallel investigation (replaces old enrichment + single agent) ---
+	// Each investigator has its own MCP tools and investigates independently.
+	// This replaces the old pattern of: enrich(Prometheus, K8s, Loki) → single agent.
+	// Benefits: each agent can make multiple tool calls, reason about results, and
+	// follow up — unlike the old enrichment activities which did a single query each.
+	currentStep = "investigating"
 	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
-		wfID, "enriching", "").Get(ctx, nil)
+		wfID, "investigating", "").Get(ctx, nil)
 
-	enrichOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy: &temporal.RetryPolicy{
-			InitialInterval:    2 * time.Second,
-			BackoffCoefficient: 2.0,
-			MaximumAttempts:    3,
-		},
-	}
-	enrichCtx := workflow.WithActivityOptions(ctx, enrichOpts)
-
-	var promResult types.PrometheusResult
-	var k8sResult types.KubernetesResult
-	var lokiResult types.LokiResult
-
-	promFuture := workflow.ExecuteActivity(enrichCtx, enrichAct.QueryPrometheus, params.Identity, alerts)
-	k8sFuture := workflow.ExecuteActivity(enrichCtx, k8sAct.QueryKubernetesAPI, params.Identity, alerts)
-	lokiFuture := workflow.ExecuteActivity(enrichCtx, enrichAct.QueryLoki, params.Identity, alerts)
-
-	// Collect results; partial failures are acceptable
-	if err := promFuture.Get(ctx, &promResult); err != nil {
-		logger.Warn("prometheus enrichment failed", "error", err)
-		promResult = types.PrometheusResult{Available: false, Error: err.Error()}
-	}
-	if err := k8sFuture.Get(ctx, &k8sResult); err != nil {
-		logger.Warn("kubernetes enrichment failed", "error", err)
-		k8sResult = types.KubernetesResult{Available: false, Error: err.Error()}
-	}
-	if err := lokiFuture.Get(ctx, &lokiResult); err != nil {
-		logger.Warn("loki enrichment failed", "error", err)
-		lokiResult = types.LokiResult{Available: false, Error: err.Error()}
-	}
-
-	enrichment := types.EnrichmentResult{
-		Prometheus: promResult,
-		Kubernetes: k8sResult,
-		Loki:       lokiResult,
-	}
-
-	// --- Step 3: Invoke triage agent ---
-	// Check if resolved during enrichment (avoid expensive LLM call)
+	// Check if resolved before starting expensive agent calls
 	if resolved {
-		logger.Info("auto-resolved during enrichment")
+		logger.Info("auto-resolved before investigation")
 		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
 			wfID, "resolved", "").Get(ctx, nil)
 		return types.TriageResult{
@@ -180,50 +143,68 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		}, nil
 	}
 
-	currentStep = "triaging"
-	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
-		wfID, "triaging", "").Get(ctx, nil)
-
-	agentOpts := workflow.ActivityOptions{
+	// Investigator activity options:
+	// - StartToCloseTimeout: 5 min (agents may make 6-8 tool calls, each takes 5-15s)
+	// - HeartbeatTimeout: 180s (agents make multi-turn tool calls via LLM; each turn takes 15-60s)
+	// - Retries: 2 attempts (handles transient 429/5xx from agent gateway)
+	investigateOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 300 * time.Second,
-		HeartbeatTimeout:    90 * time.Second,
+		HeartbeatTimeout:    180 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    5 * time.Second,
 			BackoffCoefficient: 2.0,
-			MaximumAttempts:    3,
+			MaximumAttempts:    2,
 			NonRetryableErrorTypes: []string{
 				"AuthError",
 				"ClientError",
-				"A2AClientError",
 			},
 		},
 	}
-	agentCtx := workflow.WithActivityOptions(ctx, agentOpts)
+	investigateCtx := workflow.WithActivityOptions(ctx, investigateOpts)
 
-	// Use a cancellable context for the agent activity so we can abort on resolve.
-	agentCancelCtx, cancelAgent := workflow.WithCancel(agentCtx)
-	agentFuture := workflow.ExecuteActivity(agentCancelCtx, agentAct.InvokeTriageAgent, alerts, enrichment)
+	// Launch all investigators in parallel.
+	// Note: InvokeInvestigator returns (InvestigatorOutput, nil) even on agent failure —
+	// the output.Available=false and output.Error fields indicate degraded results.
+	// Only transient infrastructure errors (429, 5xx) return an activity error for retry.
+	investigators := types.DefaultInvestigators()
+	futures := make([]workflow.Future, len(investigators))
+	for i, inv := range investigators {
+		futures[i] = workflow.ExecuteActivity(investigateCtx, multiAgent.InvokeInvestigator,
+			inv.Name, alerts, params.Identity)
+	}
 
-	// Wait for either agent completion or resolve signal
-	var report types.TriageReport
-	sel := workflow.NewSelector(ctx)
-	agentDone := false
+	// Collect results with partial failure tolerance.
+	// Even if 2 of 3 investigators fail, we proceed with whatever data we have.
+	investigations := make([]types.InvestigatorOutput, len(investigators))
+	availableCount := 0
+	for i, f := range futures {
+		var result types.InvestigatorOutput
+		if err := f.Get(ctx, &result); err != nil {
+			// Activity-level failure (all retries exhausted) — mark as unavailable
+			logger.Warn("investigator activity failed",
+				"agent", investigators[i].Name, "error", err)
+			investigations[i] = types.InvestigatorOutput{
+				AgentName: investigators[i].Name,
+				Available: false,
+				Error:     err.Error(),
+			}
+		} else {
+			investigations[i] = result
+			if result.Available {
+				availableCount++
+			}
+		}
+	}
 
-	sel.AddFuture(agentFuture, func(f workflow.Future) {
-		agentDone = true
-		err = f.Get(ctx, &report)
-	})
+	logger.Info("investigation phase complete",
+		"total", len(investigators),
+		"available", availableCount,
+	)
 
-	sel.AddReceive(resolveCh, func(c workflow.ReceiveChannel, more bool) {
-		c.Receive(ctx, nil)
-		resolved = true
-	})
-
-	sel.Select(ctx)
-
-	if resolved && !agentDone {
-		cancelAgent()
-		logger.Info("auto-resolved during triage — cancelling agent activity")
+	// --- Step 3: Consolidate findings ---
+	// Check if resolved during investigation (avoid expensive consolidation call)
+	if resolved {
+		logger.Info("auto-resolved during investigation")
 		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
 			wfID, "resolved", "").Get(ctx, nil)
 		return types.TriageResult{
@@ -236,12 +217,84 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		}, nil
 	}
 
-	// Agent completed (possibly with error)
-	if err != nil {
-		logger.Error("agent invocation failed", "error", err)
-		_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
-			wfID, "failed", "").Get(ctx, nil)
-		return types.TriageResult{}, err
+	currentStep = "consolidating"
+	_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+		wfID, "consolidating", "").Get(ctx, nil)
+
+	// If ALL investigators failed, produce a minimal failure report without calling consolidator.
+	// This avoids wasting an LLM call with zero useful input.
+	var report types.TriageReport
+	if availableCount == 0 {
+		logger.Warn("all investigators failed — producing minimal report")
+		report = types.TriageReport{
+			Classification:   "Unknown",
+			Severity:         "warning",
+			RootCause:        "Investigation failed: all investigator agents were unavailable",
+			CausalChain:      []string{"All investigator agents failed or timed out"},
+			Confidence:       0.1,
+			EscalationNeeded: true,
+		}
+	} else {
+		// Consolidator activity options:
+		// - Shorter timeout: consolidator has no tools, just LLM reasoning
+		// - HeartbeatTimeout: 180s (LLM synthesis of multi-agent findings takes 60-120s)
+		consolidateOpts := workflow.ActivityOptions{
+			StartToCloseTimeout: 300 * time.Second,
+			HeartbeatTimeout:    180 * time.Second,
+			RetryPolicy: &temporal.RetryPolicy{
+				InitialInterval:    5 * time.Second,
+				BackoffCoefficient: 2.0,
+				MaximumAttempts:    3,
+				NonRetryableErrorTypes: []string{
+					"AuthError",
+					"ClientError",
+					"A2AClientError",
+				},
+			},
+		}
+		consolidateCtx := workflow.WithActivityOptions(ctx, consolidateOpts)
+
+		// Use a cancellable context so we can abort on resolve signal.
+		cancelCtx, cancelConsolidator := workflow.WithCancel(consolidateCtx)
+		consolidateFuture := workflow.ExecuteActivity(cancelCtx, multiAgent.InvokeConsolidator, alerts, investigations)
+
+		// Wait for either consolidation or resolve signal
+		sel := workflow.NewSelector(ctx)
+		consolidateDone := false
+
+		sel.AddFuture(consolidateFuture, func(f workflow.Future) {
+			consolidateDone = true
+			err = f.Get(ctx, &report)
+		})
+
+		sel.AddReceive(resolveCh, func(c workflow.ReceiveChannel, more bool) {
+			c.Receive(ctx, nil)
+			resolved = true
+		})
+
+		sel.Select(ctx)
+
+		if resolved && !consolidateDone {
+			cancelConsolidator()
+			logger.Info("auto-resolved during consolidation — cancelling")
+			_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+				wfID, "resolved", "").Get(ctx, nil)
+			return types.TriageResult{
+				WorkflowID:   wfID,
+				Identity:     params.Identity,
+				AlertCount:   alertCount,
+				StartedAt:    startedAt,
+				CompletedAt:  workflow.Now(ctx),
+				AutoResolved: true,
+			}, nil
+		}
+
+		if err != nil {
+			logger.Error("consolidator invocation failed", "error", err)
+			_ = workflow.ExecuteActivity(stateCtx, reportAct.UpdateIncidentState,
+				wfID, "failed", "").Get(ctx, nil)
+			return types.TriageResult{}, err
+		}
 	}
 
 	// Upsert classification search attributes after agent response

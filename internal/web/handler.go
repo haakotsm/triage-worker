@@ -107,6 +107,9 @@ type DashboardData struct {
 	Query      string
 	Severity   string
 	Status     string
+	Sort       string
+	Order      string
+	TimeRange  string
 	SSEEnabled bool
 }
 
@@ -438,6 +441,9 @@ func (h *Handler) fetchIncidentTableData(r *http.Request) (DashboardData, error)
 	severity := q.Get("severity")
 	search := q.Get("search")
 	status := q.Get("status")
+	sortParam := q.Get("sort")
+	orderParam := q.Get("order")
+	timeRange := q.Get("time_range")
 
 	where := "WHERE 1=1"
 	args := []interface{}{}
@@ -453,41 +459,71 @@ func (h *Handler) fetchIncidentTableData(r *http.Request) (DashboardData, error)
 		args = append(args, "%"+search+"%")
 		argIdx++
 	}
+
+	// Expanded status filter: supports individual workflow states
 	switch status {
-	case "active":
-		where += " AND resolved_at IS NULL"
+	case "correlating", "enriching", "triaging":
+		where += " AND state = $" + strconv.Itoa(argIdx)
+		args = append(args, status)
+		argIdx++
+	case "reported":
+		where += " AND state = 'reported' AND resolved_at IS NULL"
 	case "resolved":
 		where += " AND resolved_at IS NOT NULL"
+	case "active":
+		// Legacy: show in-flight + unresolved reports
+		where += " AND resolved_at IS NULL"
 	}
+
+	// Time range filter
+	if timeRange != "" {
+		interval := timeRangeToInterval(timeRange)
+		if interval != "" {
+			where += " AND created_at > NOW() - INTERVAL '" + interval + "'"
+		}
+	}
+
+	// Build ORDER BY clause from sort param
+	orderClause := buildOrderClause(sortParam, orderParam)
+
+	// Determine which states to include based on status filter
+	isInFlightFilter := status == "correlating" || status == "enriching" || status == "triaging"
+	isCompletedFilter := status == "reported" || status == "resolved"
 
 	var totalCount int
-	countQuery := "SELECT COUNT(*) FROM triage.reports " + where + " AND state IN ('reported', 'resolved')"
-	if err := h.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount); err != nil {
-		return DashboardData{}, fmt.Errorf("count: %w", err)
-	}
-
-	dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
-		classification, severity, root_cause, causal_chain, evidence,
-		recommendations, confidence, escalation_needed, alert_count,
-		started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
-		FROM triage.reports %s AND state IN ('reported', 'resolved')
-		ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END,
-			CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
-			created_at DESC
-		LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
-	dataArgs := make([]interface{}, len(args)+2)
-	copy(dataArgs, args)
-	dataArgs[len(args)] = limit
-	dataArgs[len(args)+1] = offset
-
-	reports, err := h.queryReports(r.Context(), dataQuery, dataArgs...)
-	if err != nil {
-		return DashboardData{}, fmt.Errorf("query reports: %w", err)
-	}
-
+	var reports []Report
 	incidents := []Incident{}
-	if status != "resolved" {
-		incidents, err = h.queryActiveIncidents(r.Context(), severity, search)
+
+	// Query completed reports (unless filtering to a specific in-flight state)
+	if !isInFlightFilter {
+		countQuery := "SELECT COUNT(*) FROM triage.reports " + where + " AND state IN ('reported', 'resolved')"
+		if err := h.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&totalCount); err != nil {
+			return DashboardData{}, fmt.Errorf("count: %w", err)
+		}
+
+		dataQuery := fmt.Sprintf(`SELECT id, workflow_id, namespace, workload, kind, alert_name,
+			classification, severity, root_cause, causal_chain, evidence,
+			recommendations, confidence, escalation_needed, alert_count,
+			started_at, completed_at, created_at, resolved_at, summary, blast_radius, state
+			FROM triage.reports %s AND state IN ('reported', 'resolved')
+			%s
+			LIMIT $%d OFFSET $%d`, where, orderClause, argIdx, argIdx+1)
+		dataArgs := make([]interface{}, len(args)+2)
+		copy(dataArgs, args)
+		dataArgs[len(args)] = limit
+		dataArgs[len(args)+1] = offset
+
+		var err error
+		reports, err = h.queryReports(r.Context(), dataQuery, dataArgs...)
+		if err != nil {
+			return DashboardData{}, fmt.Errorf("query reports: %w", err)
+		}
+	}
+
+	// Query active incidents (unless filtering to a completed state)
+	if !isCompletedFilter {
+		var err error
+		incidents, err = h.queryActiveIncidents(r.Context(), severity, search, timeRange, sortParam, orderParam, status)
 		if err != nil {
 			return DashboardData{}, fmt.Errorf("query active incidents: %w", err)
 		}
@@ -502,6 +538,9 @@ func (h *Handler) fetchIncidentTableData(r *http.Request) (DashboardData, error)
 		Query:      search,
 		Severity:   severity,
 		Status:     status,
+		Sort:       sortParam,
+		Order:      orderParam,
+		TimeRange:  timeRange,
 		SSEEnabled: h.sse != nil,
 	}, nil
 }
@@ -722,10 +761,17 @@ func (h *Handler) queryReports(ctx context.Context, query string, args ...interf
 	return reports, rows.Err()
 }
 
-func (h *Handler) queryActiveIncidents(ctx context.Context, severity, search string) ([]Incident, error) {
+func (h *Handler) queryActiveIncidents(ctx context.Context, severity, search, timeRange, sortParam, orderParam, statusFilter string) ([]Incident, error) {
 	where := "WHERE state IN ('correlating', 'enriching', 'triaging')"
 	args := []interface{}{}
 	argIdx := 1
+
+	// If filtering to a specific in-flight state
+	if statusFilter == "correlating" || statusFilter == "enriching" || statusFilter == "triaging" {
+		where = "WHERE state = $" + strconv.Itoa(argIdx)
+		args = append(args, statusFilter)
+		argIdx++
+	}
 
 	if severity != "" {
 		where += " AND severity = $" + strconv.Itoa(argIdx)
@@ -735,12 +781,21 @@ func (h *Handler) queryActiveIncidents(ctx context.Context, severity, search str
 	if search != "" {
 		where += fmt.Sprintf(" AND (workload ILIKE $%d OR namespace ILIKE $%d OR alert_name ILIKE $%d)", argIdx, argIdx, argIdx)
 		args = append(args, "%"+search+"%")
+		argIdx++
 	}
+	if timeRange != "" {
+		interval := timeRangeToInterval(timeRange)
+		if interval != "" {
+			where += " AND created_at > NOW() - INTERVAL '" + interval + "'"
+		}
+	}
+
+	orderClause := buildOrderClause(sortParam, orderParam)
 
 	rows, err := h.db.QueryContext(ctx, `SELECT id, workflow_id, namespace, workload, kind, alert_name, state, severity, created_at,
 		COALESCE(completed_at, created_at) AS updated_at
 		FROM triage.reports `+where+`
-		ORDER BY created_at DESC
+		`+orderClause+`
 		LIMIT 50`, args...)
 	if err != nil {
 		return nil, err
@@ -859,6 +914,46 @@ func intParam(s string, defaultVal, min, max int) int {
 	return v
 }
 
+// buildOrderClause returns a safe SQL ORDER BY clause from user-supplied sort/order params.
+func buildOrderClause(sortParam, orderParam string) string {
+	dir := "DESC"
+	if orderParam == "asc" {
+		dir = "ASC"
+	}
+
+	switch sortParam {
+	case "age-desc":
+		return "ORDER BY created_at DESC"
+	case "age-asc":
+		return "ORDER BY created_at ASC"
+	case "severity":
+		return fmt.Sprintf("ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END %s, created_at DESC", dir)
+	case "namespace":
+		return fmt.Sprintf("ORDER BY namespace %s, created_at DESC", dir)
+	case "state":
+		return fmt.Sprintf("ORDER BY state %s, created_at DESC", dir)
+	default:
+		// Default: unresolved first, severity, then newest
+		return "ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END, CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, created_at DESC"
+	}
+}
+
+// timeRangeToInterval converts a time range shorthand to a PostgreSQL interval string.
+func timeRangeToInterval(tr string) string {
+	switch tr {
+	case "1h":
+		return "1 hour"
+	case "6h":
+		return "6 hours"
+	case "24h":
+		return "24 hours"
+	case "7d":
+		return "7 days"
+	default:
+		return ""
+	}
+}
+
 func templateFuncs() template.FuncMap {
 	return template.FuncMap{
 		"severityClass": func(s string) string {
@@ -921,6 +1016,16 @@ func templateFuncs() template.FuncMap {
 				return "badge-ghost"
 			}
 		},
+		"strengthBorder": func(s string) string {
+			switch s {
+			case "strong":
+				return "border-success"
+			case "moderate":
+				return "border-warning"
+			default:
+				return "border-base-content/20"
+			}
+		},
 		"timeAgo": func(v interface{}) string {
 			var t time.Time
 			switch val := v.(type) {
@@ -954,7 +1059,8 @@ func templateFuncs() template.FuncMap {
 			}
 			return a / b
 		},
-		"mul": func(a, b int) int { return a * b },
+		"mul":  func(a, b int) int { return a * b },
+		"mulf": func(a, b float64) float64 { return a * b },
 		"deref": func(t *time.Time) time.Time {
 			if t == nil {
 				return time.Time{}
@@ -974,6 +1080,18 @@ func templateFuncs() template.FuncMap {
 			return (total + perPage - 1) / perPage
 		},
 		// SAFETY: all return values are hardcoded HTML, no user input.
+		"blastClass": func(b string) string {
+			switch b {
+			case "cluster":
+				return "badge-error"
+			case "namespace":
+				return "badge-warning"
+			case "deployment":
+				return "badge-info"
+			default:
+				return "badge-success"
+			}
+		},
 		"blastDots": func(b string) template.HTML {
 			switch b {
 			case "cluster":

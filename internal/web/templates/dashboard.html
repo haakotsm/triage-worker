@@ -36,12 +36,14 @@
                    class="input input-bordered input-sm w-full sm:w-64"
                    value="{{.Query}}"
                    hx-get="/partials/incidents" hx-trigger="keyup changed delay:300ms"
-                   hx-target="#incidents-panel" hx-swap="innerHTML"
-                   hx-include="[name='severity'],[name='status'],[name='limit']">
+                   hx-target="#incidents-panel" hx-swap="morph:innerHTML"
+                   hx-include="closest form"
+                   hx-push-url="true">
             <select name="severity" class="select select-bordered select-sm"
                     hx-get="/partials/incidents" hx-trigger="change"
-                    hx-target="#incidents-panel" hx-swap="innerHTML"
-                    hx-include="[name='search'],[name='status'],[name='limit']">
+                    hx-target="#incidents-panel" hx-swap="morph:innerHTML"
+                    hx-include="closest form"
+                    hx-push-url="true">
               <option value="">All Severities</option>
               <option value="critical" {{if eq .Severity "critical"}}selected{{end}}>🔴 Critical</option>
               <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>🟡 Warning</option>
@@ -49,11 +51,41 @@
             </select>
             <select name="status" class="select select-bordered select-sm"
                     hx-get="/partials/incidents" hx-trigger="change"
-                    hx-target="#incidents-panel" hx-swap="innerHTML"
-                    hx-include="[name='search'],[name='severity'],[name='limit']">
+                    hx-target="#incidents-panel" hx-swap="morph:innerHTML"
+                    hx-include="closest form"
+                    hx-push-url="true">
               <option value="">All Status</option>
-              <option value="active" {{if eq .Status "active"}}selected{{end}}>Active</option>
-              <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
+              <optgroup label="In Progress">
+                <option value="correlating" {{if eq .Status "correlating"}}selected{{end}}>⏳ Correlating</option>
+                <option value="enriching" {{if eq .Status "enriching"}}selected{{end}}>🔄 Enriching</option>
+                <option value="triaging" {{if eq .Status "triaging"}}selected{{end}}>🧠 Triaging</option>
+              </optgroup>
+              <optgroup label="Completed">
+                <option value="reported" {{if eq .Status "reported"}}selected{{end}}>📋 Reported</option>
+                <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>✅ Resolved</option>
+              </optgroup>
+            </select>
+            <select name="sort" class="select select-bordered select-sm"
+                    hx-get="/partials/incidents" hx-trigger="change"
+                    hx-target="#incidents-panel" hx-swap="morph:innerHTML"
+                    hx-include="closest form"
+                    hx-push-url="true">
+              <option value="" {{if eq .Sort ""}}selected{{end}}>Default (Priority)</option>
+              <option value="age-desc" {{if eq .Sort "age-desc"}}selected{{end}}>Newest First</option>
+              <option value="age-asc" {{if eq .Sort "age-asc"}}selected{{end}}>Oldest First</option>
+              <option value="severity" {{if eq .Sort "severity"}}selected{{end}}>Severity</option>
+              <option value="namespace" {{if eq .Sort "namespace"}}selected{{end}}>Namespace</option>
+            </select>
+            <select name="time_range" class="select select-bordered select-sm"
+                    hx-get="/partials/incidents" hx-trigger="change"
+                    hx-target="#incidents-panel" hx-swap="morph:innerHTML"
+                    hx-include="closest form"
+                    hx-push-url="true">
+              <option value="" {{if eq .TimeRange ""}}selected{{end}}>All Time</option>
+              <option value="1h" {{if eq .TimeRange "1h"}}selected{{end}}>Last Hour</option>
+              <option value="6h" {{if eq .TimeRange "6h"}}selected{{end}}>Last 6h</option>
+              <option value="24h" {{if eq .TimeRange "24h"}}selected{{end}}>Last 24h</option>
+              <option value="7d" {{if eq .TimeRange "7d"}}selected{{end}}>Last 7 Days</option>
             </select>
           </form>
         </div>
@@ -61,9 +93,9 @@
 
       <div id="incidents-panel"
            hx-get="/partials/incidents"
-           hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:report-update, sse:refresh, {{end}}every 10s"
-           hx-include="#incident-filters [name], #incidents-panel [name='offset'], #incidents-panel [name='limit']"
-           hx-swap="innerHTML">
+           hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:report-update, sse:refresh, {{end}}every 30s"
+           hx-include="#incident-filters"
+           hx-swap="morph:innerHTML">
         {{template "incidents-table" .}}
       </div>
     </div>

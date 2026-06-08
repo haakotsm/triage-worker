@@ -22,7 +22,6 @@ import (
 	"github.com/haakotsm/triage-worker/internal/webhook"
 	"github.com/haakotsm/triage-worker/internal/workflow"
 
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
@@ -46,11 +45,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	temporalAddr := getEnv("TEMPORAL_ADDRESS", "temporal-frontend.temporal.svc.cluster.local:7233")
 	temporalNS := getEnv("TEMPORAL_NAMESPACE", "default")
 	taskQueue := getEnv("TEMPORAL_TASK_QUEUE", "k8s-triage")
-	agentURL := getEnv("KAGENT_A2A_URL", "http://agentgateway.agentgateway.svc.cluster.local:3001")
+	agentURL := getEnv("KAGENT_A2A_URL", "http://kagent-controller.kagent.svc.cluster.local:8083")
 	agentNS := getEnv("KAGENT_AGENT_NAMESPACE", "kagent")
-	agentName := getEnv("KAGENT_AGENT_NAME", "error-triage-agent")
-	prometheusURL := getEnv("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090")
-	lokiURL := getEnv("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
 	keycloakTokenURL := getEnv("KEYCLOAK_TOKEN_URL", "http://keycloak.keycloak.svc.cluster.local/realms/bibliotek/protocol/openid-connect/token")
 	keycloakClientID := getEnv("KEYCLOAK_CLIENT_ID", "triage-worker")
 	keycloakClientSecret := getEnv("KEYCLOAK_CLIENT_SECRET", "")
@@ -60,7 +56,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	correlationDebounce := parseDuration(getEnv("CORRELATION_DEBOUNCE", "60s"), 60*time.Second)
 	correlationHardCap := parseDuration(getEnv("CORRELATION_MAX_WINDOW", "5m"), 5*time.Minute)
 
-	fullAgentURL := fmt.Sprintf("%s/api/a2a/%s/%s", agentURL, agentNS, agentName)
+	fullGatewayURL := fmt.Sprintf("%s/api/a2a/%s", agentURL, agentNS)
 
 	// --- Database ---
 	var db *sql.DB
@@ -87,17 +83,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	// --- Kubernetes Client (reused across activity invocations) ---
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
-		logger.Warn("k8s in-cluster config unavailable — K8s enrichment will be disabled", "error", err)
+		logger.Warn("k8s in-cluster config unavailable", "error", err)
 	}
-	var k8sClientset kubernetes.Interface
-	if k8sConfig != nil {
-		k8sClientset, err = kubernetes.NewForConfig(k8sConfig)
-		if err != nil {
-			return fmt.Errorf("create k8s clientset: %w", err)
-		}
-		logger.Info("kubernetes client initialized")
-	}
-	k8sActivity := &activity.K8sActivity{Clientset: k8sClientset}
+	_ = k8sConfig // K8s client no longer needed for enrichment — agents have their own MCP tools
 
 	// --- Temporal Client ---
 	tc, err := client.Dial(client.Options{
@@ -115,18 +103,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	tokenProvider := auth.NewTokenProvider(keycloakTokenURL, keycloakClientID, keycloakClientSecret)
 
 	// --- Activities ---
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-
-	enrichActivities := &activity.Activities{
-		PrometheusURL: prometheusURL,
-		LokiURL:       lokiURL,
-		HTTPClient:    httpClient,
-	}
-
-	agentActivity := &activity.AgentActivity{
-		AgentURL:      fullAgentURL,
-		TokenProvider: tokenProvider,
-		HTTPClient:    &http.Client{}, // no Client.Timeout — controlled by activity context deadline (300s)
+	// MultiAgentActivity replaces the old enrichActivities + agentActivity pattern.
+	// Instead of: enrich(prom, k8s, loki) → single triage agent
+	// We now have: 3 investigator agents (each with MCP tools) → 1 consolidator agent
+	multiAgentActivity := &activity.MultiAgentActivity{
+		GatewayBaseURL: fullGatewayURL,
+		TokenProvider:  tokenProvider,
+		HTTPClient:     &http.Client{}, // no Client.Timeout — controlled by Temporal activity deadline
 	}
 
 	reportActivity := &activity.ReportActivity{DB: db}
@@ -138,10 +121,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	})
 
 	w.RegisterWorkflow(workflow.TriageWorkflow)
-	w.RegisterActivity(enrichActivities)
-	w.RegisterActivity(agentActivity)
+	w.RegisterActivity(multiAgentActivity)
 	w.RegisterActivity(reportActivity)
-	w.RegisterActivity(k8sActivity)
 
 	// --- HTTP Server (webhook + health + API) ---
 	var apiHandler http.Handler

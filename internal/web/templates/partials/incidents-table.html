@@ -29,8 +29,37 @@
           </tr>
         </thead>
         <tbody>
-          {{range .Incidents}}
+          {{range .Reports}}
           <tr class="hover cursor-pointer" tabindex="0" role="link"
+              hx-get="/incidents/{{.ID}}" hx-target="#main-content" hx-push-url="true"
+              hx-trigger="click, keyup[key=='Enter']" hx-include="unset">
+            <td>
+              <div class="flex items-center gap-2">
+                <span class="text-success">✓</span>
+                <span class="badge badge-xs {{incidentStateClass .State}}">{{.State}}</span>
+              </div>
+            </td>
+            <td><span class="badge badge-sm {{severityClass .Severity}}">{{.Severity}}</span></td>
+            <td class="font-mono text-xs">{{.Workload}}</td>
+            <td class="text-xs text-base-content/70">{{.Namespace}}</td>
+            <td class="text-xs">
+              <div class="font-medium">{{.AlertName}}</div>
+              {{if .Summary}}<div class="text-[11px] text-base-content/60 line-clamp-2">{{.Summary}}</div>{{end}}
+            </td>
+            <td class="text-xs text-base-content/50 font-mono">{{formatDuration .CreatedAt}}</td>
+          </tr>
+          {{end}}
+
+          {{if and .Incidents .Reports}}
+          <tr class="border-t-2 border-base-content/10">
+            <td colspan="6" class="text-xs text-base-content/40 font-semibold uppercase tracking-wide py-1">
+              In Progress
+            </td>
+          </tr>
+          {{end}}
+
+          {{range .Incidents}}
+          <tr class="hover cursor-pointer opacity-70" tabindex="0" role="link"
               hx-get="/incidents/{{.ID}}" hx-target="#main-content" hx-push-url="true"
               hx-trigger="click, keyup[key=='Enter']" hx-include="unset">
             <td>
@@ -54,27 +83,6 @@
             <td class="text-xs text-base-content/50 font-mono">{{formatDuration .CreatedAt}}</td>
           </tr>
           {{end}}
-
-          {{range .Reports}}
-          <tr class="hover cursor-pointer" tabindex="0" role="link"
-              hx-get="/incidents/{{.ID}}" hx-target="#main-content" hx-push-url="true"
-              hx-trigger="click, keyup[key=='Enter']" hx-include="unset">
-            <td>
-              <div class="flex items-center gap-2">
-                <span class="text-success">✓</span>
-                <span class="badge badge-xs {{incidentStateClass .State}}">{{.State}}</span>
-              </div>
-            </td>
-            <td><span class="badge badge-sm {{severityClass .Severity}}">{{.Severity}}</span></td>
-            <td class="font-mono text-xs">{{.Workload}}</td>
-            <td class="text-xs text-base-content/70">{{.Namespace}}</td>
-            <td class="text-xs">
-              <div class="font-medium">{{.AlertName}}</div>
-              {{if .Summary}}<div class="text-[11px] text-base-content/60 line-clamp-2">{{.Summary}}</div>{{end}}
-            </td>
-            <td class="text-xs text-base-content/50 font-mono">{{formatDuration .CreatedAt}}</td>
-          </tr>
-          {{end}}
         </tbody>
       </table>
     </div>
@@ -87,18 +95,18 @@
       <div class="join">
         {{if gt .Offset 0}}
         <button class="join-item btn btn-sm" aria-label="Previous page"
-                hx-get="/partials/incidents?offset={{sub .Offset .Limit}}&limit={{.Limit}}"
-                hx-target="#incidents-panel" hx-swap="innerHTML"
-                hx-include="#incident-filters [name='search'],#incident-filters [name='severity'],#incident-filters [name='status']">«</button>
+                hx-get="/partials/incidents?offset={{sub .Offset .Limit}}"
+                hx-target="#incidents-panel" hx-swap="morph:innerHTML"
+                hx-include="#incident-filters">«</button>
         {{end}}
         <button class="join-item btn btn-sm btn-disabled">
-          Completed page {{add (div .Offset .Limit) 1}} of {{pages .TotalCount .Limit}}
+          Page {{add (div .Offset .Limit) 1}} of {{pages .TotalCount .Limit}}
         </button>
         {{if lt (add .Offset .Limit) .TotalCount}}
         <button class="join-item btn btn-sm" aria-label="Next page"
-                hx-get="/partials/incidents?offset={{add .Offset .Limit}}&limit={{.Limit}}"
-                hx-target="#incidents-panel" hx-swap="innerHTML"
-                hx-include="#incident-filters [name='search'],#incident-filters [name='severity'],#incident-filters [name='status']">»</button>
+                hx-get="/partials/incidents?offset={{add .Offset .Limit}}"
+                hx-target="#incidents-panel" hx-swap="morph:innerHTML"
+                hx-include="#incident-filters">»</button>
         {{end}}
       </div>
     </div>

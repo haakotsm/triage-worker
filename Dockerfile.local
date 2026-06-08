@@ -1,0 +1,3 @@
+FROM scratch
+COPY worker /app/worker
+ENTRYPOINT ["/app/worker"]

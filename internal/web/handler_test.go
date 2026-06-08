@@ -283,18 +283,17 @@ func TestIncidentDetailNoBlastRadiusSRDuplication(t *testing.T) {
 	}
 	body := w.Body.String()
 
-	// The visible blast-radius label renders the word "namespace" exactly once,
-	// followed by "blast radius" — separated only by the closing font-mono span.
-	if got := strings.Count(body, `<span class="font-mono">namespace</span> blast radius`); got != 1 {
-		t.Fatalf("expected exactly one visible 'namespace ... blast radius' rendering, got %d: body=%q", got, body)
+	// Blast radius renders as a single badge with the level word appearing exactly once.
+	if got := strings.Count(body, `Blast radius: namespace`); got != 1 {
+		t.Fatalf("expected exactly one 'Blast radius: namespace' badge, got %d: body=%q", got, body)
 	}
-	// C2 regression: the sr-only span inside blastDots must not exist anymore.
+	// C2 regression: no sr-only span should duplicate the namespace word.
 	if strings.Contains(body, `<span class="sr-only">namespace</span>`) {
 		t.Fatalf("expected no sr-only namespace span in body (C2 regression), got %q", body)
 	}
-	// Belt-and-braces: no sr-only span surrounding the literal blast-radius word.
-	if strings.Contains(body, `class="sr-only">namespace<`) {
-		t.Fatalf("expected no sr-only blast-radius span (C2 regression), got %q", body)
+	// The legacy dot glyphs must not reappear.
+	if strings.Contains(body, "●●●") {
+		t.Fatalf("expected no blast-radius dot glyphs (legacy rendering), got %q", body)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

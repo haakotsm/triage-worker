@@ -27,7 +27,7 @@
             <div class="text-sm font-medium">{{.AlertName}}</div>
             {{if .Summary}}<div class="text-xs text-base-content/60 line-clamp-2">{{.Summary}}</div>{{end}}
           </td>
-          <td class="whitespace-nowrap">{{blastDots .BlastRadius}} <span class="text-xs">{{.BlastRadius}}</span></td>
+          <td class="whitespace-nowrap">{{if .BlastRadius}}<span class="badge {{blastClass .BlastRadius}} badge-sm">{{.BlastRadius}}</span>{{end}}</td>
           <td class="text-sm whitespace-nowrap">{{timeAgo .CompletedAt}}</td>
           <td>
             {{if .ResolvedAt}}
