@@ -310,11 +310,32 @@ func (h *Handler) handleIncidentStatusPoll(w http.ResponseWriter, r *http.Reques
 	}
 
 	data := h.buildIncidentDetailData(r.Context(), *report)
+
+	contentTpl := "incident-progress"
 	if data.IsComplete {
-		h.render(w, "incident-complete", data)
+		contentTpl = "incident-complete"
+	}
+
+	var buf bytes.Buffer
+	if err := h.partials.ExecuteTemplate(&buf, contentTpl, data); err != nil {
+		h.logger.Error("render incident status content", "error", err, "template", contentTpl)
+		h.renderError(w, "Internal error")
 		return
 	}
-	h.render(w, "incident-progress", data)
+
+	// Out-of-band swap of the header-status chip so the right cluster
+	// (confidence + state badge) updates in lockstep with the content body
+	// on the same /incidents/{id}/status poll. The partial's root carries
+	// hx-swap-oob="true" + the id, so htmx replaces in place without nesting.
+	// Content-only on render error.
+	if err := h.partials.ExecuteTemplate(&buf, "incident-header-status", data); err != nil {
+		h.logger.Warn("render incident-header-status", "error", err)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := buf.WriteTo(w); err != nil {
+		h.logger.Debug("write incident status response", "error", err)
+	}
 }
 
 func (h *Handler) handleReportRedirect(w http.ResponseWriter, r *http.Request) {
@@ -846,9 +867,25 @@ func templateFuncs() template.FuncMap {
 				return "badge-error"
 			case "warning":
 				return "badge-warning"
-			default:
+			case "info":
 				return "badge-info"
+			default:
+				return "badge-ghost"
 			}
+		},
+		"title": func(s string) string {
+			if s == "" {
+				return ""
+			}
+			return strings.ToUpper(s[:1]) + s[1:]
+		},
+		"fmtElapsed": func(ms int64) string {
+			s := ms / 1000
+			if s < 60 {
+				return fmt.Sprintf("%ds", s)
+			}
+			m := s / 60
+			return fmt.Sprintf("%dm %ds", m, s%60)
 		},
 		"blastIcon": func(b string) string {
 			switch b {
@@ -940,13 +977,13 @@ func templateFuncs() template.FuncMap {
 		"blastDots": func(b string) template.HTML {
 			switch b {
 			case "cluster":
-				return template.HTML(`<span aria-hidden="true" class="text-error">●●●●</span><span class="sr-only">cluster</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-error">●●●●</span>`)
 			case "namespace":
-				return template.HTML(`<span aria-hidden="true" class="text-warning">●●●</span><span class="sr-only">namespace</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-warning">●●●</span>`)
 			case "deployment":
-				return template.HTML(`<span aria-hidden="true" class="text-info">●●</span><span class="sr-only">deployment</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-info">●●</span>`)
 			default:
-				return template.HTML(`<span aria-hidden="true" class="text-success">●</span><span class="sr-only">pod</span>`)
+				return template.HTML(`<span aria-hidden="true" class="text-success">●</span>`)
 			}
 		},
 		"fmtPct": func(f float64) string {

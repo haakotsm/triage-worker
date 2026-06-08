@@ -1,47 +1,64 @@
+{{define "incident-header-status-body"}}
+{{- if .IsComplete}}
+  {{if gt .Report.Confidence 0.0}}
+  <div class="radial-progress text-primary text-[10px]"
+       style="--value:{{printf "%.0f" .Report.Confidence}};--size:2rem;--thickness:2px;"
+       role="img"
+       aria-label="Agent confidence"
+       aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
+       aria-valuemin="0"
+       aria-valuemax="100">
+    <span aria-hidden="true">{{printf "%.0f" .Report.Confidence}}%</span>
+  </div>
+  <span class="text-[10px] text-base-content/60">conf</span>
+  {{end}}
+  {{if .Report.ResolvedAt}}
+    <span class="badge badge-success"><span class="sr-only">Status: </span>Resolved {{timeAgo (deref .Report.ResolvedAt)}}</span>
+  {{else if eq .Report.State "failed"}}
+    <span class="badge badge-error"><span class="sr-only">Status: </span>Failed{{if .Report.CompletedAt}} {{timeAgo .Report.CompletedAt}}{{end}}</span>
+  {{else}}
+    <span class="badge badge-success"><span class="sr-only">Status: </span>Triaged{{if .Report.CompletedAt}} {{timeAgo .Report.CompletedAt}}{{end}}</span>
+  {{end}}
+{{- else}}
+  <span class="badge badge-warning badge-outline gap-1">
+    <span class="loading loading-ring loading-xs" aria-hidden="true"></span>
+    {{if .LiveStatus.Step}}{{title .LiveStatus.Step}}…{{else}}In flight{{end}}{{if .LiveStatus.ElapsedMs}} · {{fmtElapsed .LiveStatus.ElapsedMs}}{{end}}
+  </span>
+{{- end}}
+{{end}}
+
 {{define "incident-detail"}}
 <div class="flex flex-col gap-4" {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}>
-  <div class="breadcrumbs text-sm">
-    <ul>
-      <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
-      <li>{{.Report.Kind}}/{{.Report.Workload}}</li>
-    </ul>
-  </div>
+  <nav aria-label="Breadcrumb">
+    <div class="breadcrumbs text-sm">
+      <ul>
+        <li><a href="/" hx-get="/" hx-target="#main-content" hx-push-url="true">Dashboard</a></li>
+        <li aria-current="page">{{.Report.Kind}}/{{.Report.Workload}}</li>
+      </ul>
+    </div>
+  </nav>
 
   <div class="card bg-base-100 shadow">
-    <div class="card-body">
-      <div class="flex justify-between items-start flex-wrap gap-2">
+    <div class="card-body py-3 px-4">
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-start">
         <div>
-          <h2 class="card-title text-lg font-mono">
+          <div class="flex flex-wrap items-center gap-1.5 mb-1">
+            {{if .Report.Severity}}<span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>{{else}}<span class="badge badge-ghost" title="Severity not yet classified">?</span>{{end}}
+            {{if and .Report.Classification (ne .Report.Classification "Unknown")}}<span class="badge badge-outline">{{.Report.Classification}}</span>{{end}}
+            {{if .Report.EscalationNeeded}}<span class="badge badge-error">⚠ Escalate</span>{{end}}
+          </div>
+          <h1 class="card-title text-lg font-mono">
             {{.Report.Kind}}/{{.Report.Workload}}
-            <span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>
-          </h2>
+          </h1>
+          {{if .Report.Summary}}<p class="text-sm text-base-content/80 line-clamp-2 mt-1">{{.Report.Summary}}</p>{{end}}
           <p class="text-sm text-base-content/60 mt-1">
-            Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
-            · Alert: {{.Report.AlertName}}
-            {{if .Report.BlastRadius}}· {{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}} blast radius{{end}}
+            {{if .Report.Namespace}}Namespace: <span class="font-mono">{{.Report.Namespace}}</span>{{end}}
+            {{if .Report.AlertName}}· Alert: {{.Report.AlertName}}{{if gt .Report.AlertCount 1}} ×{{.Report.AlertCount}}{{end}}{{end}}
+            {{if .Report.BlastRadius}}· {{blastDots .Report.BlastRadius}} <span class="font-mono">{{.Report.BlastRadius}}</span> blast radius{{end}}
           </p>
         </div>
-        <div class="flex items-center gap-3">
-          {{if .IsComplete}}
-            {{if gt .Report.Confidence 0.0}}
-            <div class="radial-progress text-primary text-xs"
-                 style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:3px;"
-                 role="progressbar">
-              {{printf "%.0f" .Report.Confidence}}%
-            </div>
-            {{end}}
-            {{if .Report.ResolvedAt}}
-              <span class="badge badge-success">Resolved {{timeAgo (deref .Report.ResolvedAt)}}</span>
-            {{else if eq .Report.State "failed"}}
-              <span class="badge badge-error">Failed</span>
-            {{else}}
-              <span class="badge badge-success">Triaged</span>
-            {{end}}
-          {{else}}
-            <span class="badge badge-warning badge-outline gap-1">
-              <span class="loading loading-ring loading-xs"></span> In flight
-            </span>
-          {{end}}
+        <div id="incident-header-status" class="flex items-center gap-2" aria-live="polite" aria-atomic="true">
+          {{template "incident-header-status-body" .}}
         </div>
       </div>
     </div>
@@ -56,7 +73,7 @@
      hx-get="/incidents/{{.Report.ID}}/status"
      hx-trigger="every 2s{{if .SSEEnabled}}, sse:incident-update, sse:report-update{{end}}"
      hx-target="this"
-     hx-swap="outerHTML transition:true">
+     hx-swap="outerHTML">
   <div class="card bg-base-100 shadow">
     <div class="card-body py-3">
       <ul class="steps steps-horizontal w-full text-xs">
@@ -127,19 +144,16 @@
           <span class="badge badge-ghost badge-sm ml-1">{{len .Report.Evidence}}</span>
         </summary>
         <div class="collapse-content">
-          <div class="overflow-x-auto">
-            <table class="table table-xs">
-              <thead><tr><th>Observation</th><th>Source</th><th>Strength</th></tr></thead>
-              <tbody>
-                {{range .Report.Evidence}}
-                <tr>
-                  <td class="max-w-xs truncate">{{.Observation}}</td>
-                  <td class="font-mono text-xs">{{.Source}}</td>
-                  <td><span class="badge badge-xs {{strengthClass .Strength}}">{{.Strength}}</span></td>
-                </tr>
-                {{end}}
-              </tbody>
-            </table>
+          <div class="flex flex-col gap-1.5">
+            {{range .Report.Evidence}}
+            <div class="rounded-lg bg-base-200/40 border-l-4 px-3 py-2 {{strengthBorder .Strength}}">
+              <p class="text-sm text-base-content leading-relaxed break-words">{{.Observation}}</p>
+              <div class="flex items-center gap-2 mt-1.5">
+                <span class="badge badge-xs {{strengthClass .Strength}}">{{.Strength}}</span>
+                <span class="font-mono text-[11px] text-base-content/50">{{.Source}}</span>
+              </div>
+            </div>
+            {{end}}
           </div>
         </div>
       </details>
@@ -271,4 +285,10 @@
 {{else}}
   {{template "incident-progress" .}}
 {{end}}
+{{end}}
+
+{{define "incident-header-status"}}
+<div id="incident-header-status" class="flex items-center gap-2" aria-live="polite" aria-atomic="true" hx-swap-oob="true">
+  {{template "incident-header-status-body" .}}
+</div>
 {{end}}

@@ -118,8 +118,8 @@ func TestIncidentDetailReturns200ForInFlightIncident(t *testing.T) {
 	if !strings.Contains(body, "hx-get=\"/incidents/7/status\"") {
 		t.Fatalf("expected polling target in body, got %q", body)
 	}
-	if !strings.Contains(body, "In flight") {
-		t.Fatalf("expected in-flight badge in body, got %q", body)
+	if !strings.Contains(body, "Triaging…") {
+		t.Fatalf("expected title-cased live step in body, got %q", body)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -160,6 +160,15 @@ func TestIncidentDetailReturns200ForCompletedIncident(t *testing.T) {
 	}
 	if strings.Contains(body, "hx-get=\"/incidents/9/status\"") {
 		t.Fatalf("expected completed incident page to stop polling, got %q", body)
+	}
+	if !strings.Contains(body, `aria-label="Agent confidence"`) {
+		t.Fatalf("expected aria-label=\"Agent confidence\" on confidence radial, got %q", body)
+	}
+	if !strings.Contains(body, `role="img"`) {
+		t.Fatalf("expected role=\"img\" on confidence radial (not progressbar), got %q", body)
+	}
+	if strings.Contains(body, `role="progressbar"`) {
+		t.Fatalf("expected confidence radial to use role=\"img\", not progressbar, got %q", body)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -243,6 +252,77 @@ func TestIncidentStatusPollReturnsCompletePartialForTerminalIncident(t *testing.
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestIncidentDetailNoBlastRadiusSRDuplication(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	report := testReport(14, "reported")
+	report.BlastRadius = "namespace"
+	report.RootCause = "Test root cause for blast-radius regression"
+	mock.ExpectQuery(regexp.QuoteMeta("FROM triage.reports WHERE id = $1")).
+		WithArgs(int64(14)).
+		WillReturnRows(reportRows(report))
+
+	h, err := NewHandler(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/incidents/14", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /incidents/14 = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+
+	// The visible blast-radius label renders the word "namespace" exactly once,
+	// followed by "blast radius" — separated only by the closing font-mono span.
+	if got := strings.Count(body, `<span class="font-mono">namespace</span> blast radius`); got != 1 {
+		t.Fatalf("expected exactly one visible 'namespace ... blast radius' rendering, got %d: body=%q", got, body)
+	}
+	// C2 regression: the sr-only span inside blastDots must not exist anymore.
+	if strings.Contains(body, `<span class="sr-only">namespace</span>`) {
+		t.Fatalf("expected no sr-only namespace span in body (C2 regression), got %q", body)
+	}
+	// Belt-and-braces: no sr-only span surrounding the literal blast-radius word.
+	if strings.Contains(body, `class="sr-only">namespace<`) {
+		t.Fatalf("expected no sr-only blast-radius span (C2 regression), got %q", body)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestSeverityClass(t *testing.T) {
+	funcs := templateFuncs()
+	raw, ok := funcs["severityClass"]
+	if !ok {
+		t.Fatalf("severityClass not registered in templateFuncs()")
+	}
+	fn, ok := raw.(func(string) string)
+	if !ok {
+		t.Fatalf("severityClass has unexpected signature %T", raw)
+	}
+	cases := map[string]string{
+		"critical": "badge-error",
+		"warning":  "badge-warning",
+		"info":     "badge-info",
+		"":         "badge-ghost",
+		"bogus":    "badge-ghost",
+	}
+	for in, want := range cases {
+		got := fn(in)
+		if got != want {
+			t.Errorf("severityClass(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
