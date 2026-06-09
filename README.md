@@ -4,7 +4,7 @@ Kubernetes error triage worker — Temporal workflow orchestration + kagent A2A 
 
 ## Overview
 
-Receives Alertmanager webhook notifications, correlates related alerts using Temporal signal aggregation, enriches context from Prometheus/Loki/K8s API, and invokes a kagent AI agent for root cause diagnosis.
+Receives Alertmanager webhook notifications, correlates related alerts using Temporal signal aggregation, enriches context from Prometheus/Loki/K8s API, and invokes a kagent AI agent (via agentgateway) for root cause diagnosis. Persists structured reports to PostgreSQL and serves a server-rendered web dashboard (htmx + Alpine + SSE) for operator triage.
 
 ## Architecture
 
@@ -24,6 +24,11 @@ Alertmanager → webhook/handler.go → Temporal SignalWithStart
                                           │
                                           ▼
                                   PostgreSQL (report)
+                                          │
+                                          │ PG LISTEN/NOTIFY
+                                          ▼
+                              Web Dashboard (htmx + SSE)
+                              /dashboard · /events · /api/*
 ```
 
 ## Configuration
@@ -41,7 +46,9 @@ Alertmanager → webhook/handler.go → Temporal SignalWithStart
 | `KEYCLOAK_TOKEN_URL` | `http://keycloak.keycloak.svc.cluster.local/realms/bibliotek/protocol/openid-connect/token` | OAuth2 token endpoint |
 | `KEYCLOAK_CLIENT_ID` | `triage-worker` | OAuth2 client ID |
 | `KEYCLOAK_CLIENT_SECRET` | — | OAuth2 client secret |
-| `DATABASE_URL` | — | PostgreSQL connection string |
+| `DATABASE_URL` | — | PostgreSQL connection string (enables report persistence, API and web dashboard) |
+| `WEBHOOK_SECRET` | — | Bearer token required on the Alertmanager webhook (empty = unauthenticated) |
+| `DEV_MODE` | `false` | When `true`, web dashboard injects a synthetic dev user and bypasses upstream auth headers |
 | `LISTEN_ADDR` | `:8080` | HTTP server listen address |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
@@ -60,12 +67,25 @@ go test -race -count=1 ./...
 # Run locally (requires Temporal and services)
 export TEMPORAL_ADDRESS=localhost:7233
 export DATABASE_URL=postgres://user:pass@localhost:5432/triage?sslmode=disable
+export DEV_MODE=true   # bypass auth headers when accessing /dashboard locally
 ./triage-worker
 
 # Docker
 docker build -t triage-worker .
 docker run -p 8080:8080 triage-worker
 ```
+
+### Dashboard CSS
+
+Tailwind + daisyUI styles are pre-built into `internal/web/static/output.css` and embedded via `go:embed`. The runtime container ships no Node.js. To regenerate the stylesheet after editing templates:
+
+```bash
+cd .css-build
+npm install
+npx @tailwindcss/cli -i app.css -o ../internal/web/static/output.css --minify
+```
+
+The `.css-build/` directory is gitignored — only `output.css` is checked in.
 
 ## Test Scenarios
 
@@ -87,17 +107,36 @@ curl -X POST http://localhost:8080/webhook \
 
 ## API
 
-### POST /webhook
+### Webhook & health
 
-Alertmanager webhook endpoint. Receives alert groups and starts/signals Temporal workflows.
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/webhook` | Alertmanager webhook. Requires `Authorization: Bearer $WEBHOOK_SECRET` when set, then calls `SignalWithStart` on `TriageWorkflow`. |
+| `GET` | `/healthz` | Liveness probe — always 200. |
+| `GET` | `/readyz` | Readiness probe — 200 only when Temporal is reachable. |
 
-### GET /healthz
+### JSON API (enabled when `DATABASE_URL` is set)
 
-Liveness probe — always returns 200.
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/reports` | List recent triage reports (paginated). |
+| `GET` | `/api/reports/active` | List unresolved reports. |
+| `GET` | `/api/reports/{id}` | Fetch a single report by ID. |
 
-### GET /readyz
+### Web dashboard (enabled when `DATABASE_URL` is set)
 
-Readiness probe — returns 200 only when Temporal is reachable.
+Server-rendered htmx + Alpine UI gated by upstream auth proxy headers (`X-Auth-Request-Email`, `X-Auth-Request-User`, `X-Auth-Request-Groups`). Set `DEV_MODE=true` to bypass for local development.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` · `/dashboard` | Triage operator dashboard (list + stats). |
+| `GET` | `/incidents/{id}` | Incident detail view. |
+| `GET` | `/reports/{id}` | Legacy alias — 301 redirects to `/incidents/{id}`. |
+| `GET` | `/events` | SSE stream of dashboard updates (backed by PostgreSQL `LISTEN/NOTIFY`). |
+| `GET` | `/partials/{reports,stats,incidents}` | htmx fragments for live refresh. |
+| `POST` | `/api/incidents/{id}/{acknowledge,escalate,notes,retriage}` | Operator actions (CSRF-protected). |
+| `POST` | `/reports/{id}/resolve` · `/incidents/{id}/resolve` | Resolve a report (CSRF-protected). |
+| `GET` | `/static/*` | Embedded CSS/JS assets (Tailwind output, htmx, Alpine, SSE shim). |
 
 ## Security
 
@@ -106,7 +145,10 @@ Readiness probe — returns 200 only when Temporal is reachable.
 - NetworkPolicy blocks direct kagent access (must go through agentgateway)
 - Input sanitization on all telemetry data before passing to agent
 - Body size limit (1MB) on webhook endpoint
+- Bearer-token-authenticated Alertmanager webhook when `WEBHOOK_SECRET` is set (constant-time comparison)
 - Non-retryable error classification prevents infinite retry loops
+- Web dashboard requires upstream auth proxy headers; all state-changing requests are CSRF-protected (double-submit token)
+- Distroless runtime image (`gcr.io/distroless/static-debian12:nonroot`) — no shell. For in-cluster debugging use `kubectl debug` with an ephemeral container rather than expecting `wget`/`curl` to be present
 
 ## Operator Guide
 
@@ -143,7 +185,8 @@ Deployed via ArgoCD from `ops/argocd/platform/kagent/triage/`. Manifests:
 ### Monitoring
 
 - **Temporal UI**: `http://temporal.localhost` → search by TaskQueue `k8s-triage`
-- **Health probe**: `GET :8080/readyz` — checks Temporal connectivity
+- **Health probe**: `GET :8080/readyz` — checks Temporal connectivity. The runtime image is distroless and has no shell, so probes must use Kubernetes `httpGet` (not `exec` + `wget`/`curl`). For ad-hoc checks use `kubectl debug pod/<name> --image=busybox --target=triage-worker -- wget -qO- http://localhost:8080/readyz`.
+- **Web dashboard**: `GET :8080/dashboard` — live operator view (requires auth proxy in front)
 - **Logs**: structured JSON with `component`, `workflow_id`, `namespace`
 
 ### Troubleshooting
@@ -152,9 +195,12 @@ Deployed via ArgoCD from `ops/argocd/platform/kagent/triage/`. Manifests:
 |---------|-------|-----|
 | /readyz returns 503 | Temporal unreachable | Check `temporal-frontend.temporal.svc:7233` |
 | Webhook returns 500 | SignalWithStart failed | Check worker logs, Temporal health |
+| Webhook returns 401 | Bearer token mismatch | Verify Alertmanager `http_config.authorization.credentials` matches `WEBHOOK_SECRET` |
 | Agent returns ParseError | LLM output not valid JSON | Check agent system prompt, model size |
 | Auth rejected (401) | Token expired or wrong client | Check Keycloak `triage-worker` client secret |
 | Rate limited (429) | Too many A2A calls | Check agentgateway policy rate limit |
+| Dashboard 401 | Missing upstream auth headers | Ensure oauth2-proxy fronts the route, or set `DEV_MODE=true` locally |
+| Dashboard `/events` stalls | SSE broker failed to start (no PG `LISTEN`) | Verify `DATABASE_URL` reachable; check startup log for `SSE broker failed to start` |
 
 ### Progressive Automation Levels
 
