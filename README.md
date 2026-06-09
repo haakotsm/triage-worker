@@ -130,7 +130,8 @@ Server-rendered htmx + Alpine UI gated by upstream auth proxy headers (`X-Auth-R
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` · `/dashboard` | Triage operator dashboard (list + stats). |
-| `GET` | `/reports/{id}` · `/incidents/{id}` | Report detail view. |
+| `GET` | `/incidents/{id}` | Incident detail view. |
+| `GET` | `/reports/{id}` | Legacy alias — 301 redirects to `/incidents/{id}`. |
 | `GET` | `/events` | SSE stream of dashboard updates (backed by PostgreSQL `LISTEN/NOTIFY`). |
 | `GET` | `/partials/{reports,stats,incidents}` | htmx fragments for live refresh. |
 | `POST` | `/api/incidents/{id}/{acknowledge,escalate,notes,retriage}` | Operator actions (CSRF-protected). |
