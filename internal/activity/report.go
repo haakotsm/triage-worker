@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/haakotsm/triage-worker/internal/types"
@@ -155,10 +156,51 @@ func (r *ReportActivity) CreateIncident(ctx context.Context, workflowID, namespa
 	return nil
 }
 
+// migrationLockKey is an arbitrary stable bigint used by pg_advisory_lock to
+// serialize MigrateSchema across concurrent replicas. Any value works as long
+// as every replica agrees on it.
+const migrationLockKey int64 = 0x7472696167655F31 // ASCII "triage_1"
+
 // MigrateSchema creates the triage schema and reports table if they don't exist.
+//
+// Concurrent replicas serialize via a Postgres advisory lock: "CREATE … IF
+// NOT EXISTS" is not concurrency-safe at the catalog level — two replicas
+// racing on CREATE SCHEMA can both check, both proceed to insert, and one
+// gets `duplicate key value violates unique constraint
+// "pg_namespace_nspname_index" (23505)`. Observed when two replicas
+// restarted in lockstep after fixing the NetworkPolicy egress.
+//
+// The lock is held on a dedicated connection for both DDL phases and
+// released explicitly so it doesn't sit around until the pooled session
+// closes.
 func MigrateSchema(ctx context.Context, db *sql.DB) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+		return fmt.Errorf("acquire advisory lock: %w", err)
+	}
+	defer func() {
+		// Fresh, short context so the unlock still runs if the parent
+		// expired mid-migration. conn.Close() returns the connection to
+		// the pool — it does NOT close the PG session — so a swallowed
+		// unlock error can leave the advisory lock held on the pooled
+		// session until the pool eventually recycles it (potentially
+		// hours). Log loudly if the unlock fails so the operator can
+		// intervene.
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+			slog.Warn("pg_advisory_unlock failed; lock may persist until the pooled session closes",
+				"error", err, "lock_key", migrationLockKey)
+		}
+	}()
 
 	// Phase 1: DDL — create schema, table, indexes, add columns.
 	ddl := `
@@ -237,7 +279,7 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		DROP TABLE IF EXISTS triage.incidents;
 		DROP FUNCTION IF EXISTS triage.notify_incident_change() CASCADE;
 	`
-	if _, err := db.ExecContext(ctx, ddl); err != nil {
+	if _, err := conn.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("ddl: %w", err)
 	}
 
@@ -284,7 +326,7 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 			AFTER INSERT OR UPDATE ON triage.reports
 			FOR EACH ROW EXECUTE FUNCTION triage.notify_report_change();
 	`
-	if _, err := db.ExecContext(ctx, dml); err != nil {
+	if _, err := conn.ExecContext(ctx, dml); err != nil {
 		return fmt.Errorf("dml: %w", err)
 	}
 
