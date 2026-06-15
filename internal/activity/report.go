@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/haakotsm/triage-worker/internal/types"
@@ -187,12 +188,18 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 	}
 	defer func() {
 		// Fresh, short context so the unlock still runs if the parent
-		// expired mid-migration. PG would release the lock on session
-		// close anyway, but we don't want it lingering until the pool
-		// recycles the conn.
+		// expired mid-migration. conn.Close() returns the connection to
+		// the pool — it does NOT close the PG session — so a swallowed
+		// unlock error can leave the advisory lock held on the pooled
+		// session until the pool eventually recycles it (potentially
+		// hours). Log loudly if the unlock fails so the operator can
+		// intervene.
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+			slog.Warn("pg_advisory_unlock failed; lock may persist until the pooled session closes",
+				"error", err, "lock_key", migrationLockKey)
+		}
 	}()
 
 	// Phase 1: DDL — create schema, table, indexes, add columns.
