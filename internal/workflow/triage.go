@@ -36,7 +36,7 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 
 	// Short-lived activity options for state updates (non-critical, best-effort).
 	stateOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 5 * time.Second,
+		StartToCloseTimeout: 15 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	}
 	stateCtx := workflow.WithActivityOptions(ctx, stateOpts)
