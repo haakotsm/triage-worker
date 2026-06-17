@@ -187,6 +187,69 @@ func TestWorkflowID(t *testing.T) {
 	}
 }
 
+func TestWorkflowIDForAttempt(t *testing.T) {
+	id := IncidentIdentity{
+		Namespace: "default",
+		Kind:      "Deployment",
+		Name:      "my-app",
+		AlertName: "KubePodCrashLooping",
+	}
+	stem := id.WorkflowID()
+
+	cases := []struct {
+		attempt int
+		want    string
+	}{
+		{0, stem},     // defensive: <=1 collapses to the stem
+		{1, stem},     // attempt 1 must remain the stem for backwards compat
+		{2, stem + "#2"},
+		{42, stem + "#42"},
+	}
+	for _, tc := range cases {
+		if got := id.WorkflowIDForAttempt(tc.attempt); got != tc.want {
+			t.Errorf("WorkflowIDForAttempt(%d) = %q, want %q", tc.attempt, got, tc.want)
+		}
+	}
+}
+
+func TestParseAttempt(t *testing.T) {
+	cases := []struct {
+		wfID        string
+		wantStem    string
+		wantAttempt int
+	}{
+		// Legacy unsuffixed IDs round-trip to attempt 1.
+		{"triage/default/Deployment/my-app/CrashLoop", "triage/default/Deployment/my-app/CrashLoop", 1},
+		{"triage/default/Deployment/my-app/CrashLoop#2", "triage/default/Deployment/my-app/CrashLoop", 2},
+		{"triage/default/Deployment/my-app/CrashLoop#42", "triage/default/Deployment/my-app/CrashLoop", 42},
+		// Malformed suffix → treat the whole string as the stem rather than
+		// guessing, so a corrupted wfID can't silently round-trip into a
+		// different identity.
+		{"triage/x/y/z/A#notanumber", "triage/x/y/z/A#notanumber", 1},
+		{"triage/x/y/z/A#0", "triage/x/y/z/A#0", 1},
+		{"triage/x/y/z/A#-1", "triage/x/y/z/A#-1", 1},
+	}
+	for _, tc := range cases {
+		gotStem, gotAttempt := ParseAttempt(tc.wfID)
+		if gotStem != tc.wantStem || gotAttempt != tc.wantAttempt {
+			t.Errorf("ParseAttempt(%q) = (%q, %d), want (%q, %d)",
+				tc.wfID, gotStem, gotAttempt, tc.wantStem, tc.wantAttempt)
+		}
+	}
+}
+
+func TestParseAttempt_RoundTrip(t *testing.T) {
+	id := IncidentIdentity{Namespace: "ns", Kind: "Deployment", Name: "app", AlertName: "Alert"}
+	for n := 1; n <= 5; n++ {
+		wfID := id.WorkflowIDForAttempt(n)
+		stem, attempt := ParseAttempt(wfID)
+		if stem != id.WorkflowID() || attempt != max(n, 1) {
+			t.Errorf("round-trip n=%d: wfID=%q → stem=%q attempt=%d (want stem=%q attempt=%d)",
+				n, wfID, stem, attempt, id.WorkflowID(), max(n, 1))
+		}
+	}
+}
+
 func TestFiringAlerts(t *testing.T) {
 	now := time.Now()
 	group := AlertGroup{
