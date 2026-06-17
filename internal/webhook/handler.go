@@ -435,16 +435,15 @@ func (h *Handler) rollbackOnReturn(tx *sql.Tx, stem string) {
 
 // advisoryLockKey1 is the first argument to the two-arg form of
 // pg_advisory_xact_lock(int4, int4). The value is arbitrary — replicas
-// just need to agree. The migration code in activity/report.go uses the
-// one-arg form pg_advisory_lock(bigint), which lives in a separate
-// Postgres lock space, so no collision is possible regardless of this
+// just need to agree. The migration code in activity uses the one-arg
+// form pg_advisory_lock(bigint), which lives in a separate Postgres lock
+// space, so no cross-system collision is possible regardless of this
 // value.
 //
-// The int32 type is load-bearing: it pins Postgres's overload resolution
-// to (int4, int4). Changing to int (which on amd64 is int64) would cause
-// the driver to send a bigint and Postgres would resolve to the one-arg
-// pg_advisory_xact_lock(bigint) overload — silently colliding with the
-// migration lock space.
+// The int32 type is self-documenting — it mirrors the Postgres int4
+// parameter. database/sql widens it to int64 before reaching the driver
+// anyway, so flipping it to int would not change the wire encoding; the
+// type is here for readability, not enforcement.
 const advisoryLockKey1 int32 = 0x74726961 // ASCII "tria"
 
 func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity types.IncidentIdentity, alerts []types.Alert) error {

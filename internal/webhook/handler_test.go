@@ -616,6 +616,16 @@ func TestHandleResolvedAlerts_DBErrorIsReported(t *testing.T) {
 
 // --- Tests for resolveWorkflowID: open dedup, flap guard, attempt mint ---
 
+// Pins the constant linkage that the commit message claims — a future edit
+// reverting stuckProcessingTTL to a literal would compile and pass every
+// other test, then silently drift from the Temporal WorkflowExecutionTimeout.
+func TestStuckProcessingTTLBoundToWorkflowExecutionTimeout(t *testing.T) {
+	if stuckProcessingTTL != workflowExecutionTimeout {
+		t.Fatalf("constants drifted: stuckProcessingTTL=%v workflowExecutionTimeout=%v — the DB-side TTL bypass and the Temporal-side cap must agree",
+			stuckProcessingTTL, workflowExecutionTimeout)
+	}
+}
+
 func testIdentity() types.IncidentIdentity {
 	return types.DeriveIdentity(map[string]string{
 		"alertname":  "KubePodCrashLooping",
@@ -896,7 +906,10 @@ func TestResolveWorkflowID_BeginTxError(t *testing.T) {
 	}
 }
 
-// Commit failure on the open-row reuse path is a real error.
+// Commit failure on the open-row reuse path is a real error. HasPrefix
+// (rather than Contains) pins the "commit: %w" wrap — Contains would have
+// matched the underlying mock message too and let a regression that
+// dropped the wrap slip through.
 func TestResolveWorkflowID_CommitError(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
@@ -907,14 +920,14 @@ func TestResolveWorkflowID_CommitError(t *testing.T) {
 	expectStemLock(mock, identity.WorkflowID())
 	expectOpenLookup(mock, identity).
 		WillReturnRows(sqlmock.NewRows([]string{"workflow_id"}).AddRow(identity.WorkflowID()))
-	mock.ExpectCommit().WillReturnError(fmt.Errorf("commit failed"))
+	mock.ExpectCommit().WillReturnError(fmt.Errorf("connection lost"))
 
 	_, err := h.resolveWorkflowID(t.Context(), identity)
 	if err == nil {
 		t.Fatal("resolveWorkflowID: got nil err, want commit error")
 	}
-	if !strings.Contains(err.Error(), "commit") {
-		t.Errorf("err = %v, want commit error", err)
+	if !strings.HasPrefix(err.Error(), "commit:") {
+		t.Errorf("err = %v, want prefix 'commit:'", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -1017,7 +1030,11 @@ func TestResolveWorkflowID_AttemptHistoryNonErrNoRowsError(t *testing.T) {
 }
 
 // resolveByStem's BeginTx error must surface as errored>0 so the HTTP
-// handler returns 500. Sibling stems still run.
+// handler returns 500. Single-stem to avoid sqlmock's quirk of consuming
+// ExpectBegin in declaration order even with MatchExpectationsInOrder(false)
+// — a two-stem variant racing against Go map iteration order would be
+// flaky (~10% failure rate). The "sibling stems still run" contract is
+// covered by TestHandleResolvedAlerts_DBErrorIsReported.
 func TestHandleResolvedAlerts_ResolveByStem_BeginTxError(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
@@ -1027,30 +1044,14 @@ func TestHandleResolvedAlerts_ResolveByStem_BeginTxError(t *testing.T) {
 		Status: "resolved",
 		Alerts: []types.Alert{
 			{Status: "resolved", Labels: map[string]string{"alertname": "A", "namespace": "ns", "deployment": "app"}},
-			{Status: "resolved", Labels: map[string]string{"alertname": "B", "namespace": "ns", "deployment": "app"}},
 		},
 	}
-	idOK := types.DeriveIdentity(group.Alerts[1].Labels)
 
-	// Map iteration is non-deterministic — one stem's Begin fails, the
-	// other completes normally.
-	mock.MatchExpectationsInOrder(false)
 	mock.ExpectBegin().WillReturnError(fmt.Errorf("conn pool exhausted"))
 
-	expectStemLock(mock, idOK.WorkflowID())
-	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
-		WithArgs(idOK.Namespace, idOK.Kind, idOK.Name, idOK.AlertName).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-
 	updated, errored := h.handleResolvedAlerts(t.Context(), group)
-	if errored != 1 {
-		t.Errorf("errored = %d, want 1", errored)
-	}
-	// updated could be 0 or 1 depending on which stem hit which expectation,
-	// but the failure tally must reach 1.
-	if updated > 1 {
-		t.Errorf("updated = %d, want <= 1", updated)
+	if updated != 0 || errored != 1 {
+		t.Errorf("got (%d, %d), want (0, 1)", updated, errored)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
