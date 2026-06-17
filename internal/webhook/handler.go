@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,11 @@ import (
 	"github.com/haakotsm/triage-worker/internal/types"
 	"github.com/haakotsm/triage-worker/internal/workflow"
 )
+
+// ErrSkipFlap is returned by resolveWorkflowID when the prior incident for
+// the identity was resolved within the flap window. The caller should drop
+// the alert silently — it is not an error condition.
+var ErrSkipFlap = stderrors.New("alert skipped: within flap window after recent resolution")
 
 const maxBodySize = 1 << 20 // 1 MB
 
@@ -126,23 +132,38 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle resolved alerts — mark matching reports as resolved
+	ctx := r.Context()
+
+	// Handle resolved alerts — mark matching reports as resolved. A DB error
+	// surfaces as a 500 so Alertmanager retries; otherwise a resolution lost
+	// to a transient DB blip would leave the row stuck in 'processing'
+	// forever and block every future re-fire from minting a new attempt.
 	firing := alertGroup.FiringAlerts()
 	if len(firing) == 0 {
-		resolved := h.handleResolvedAlerts(r.Context(), alertGroup)
+		updated, errored := h.handleResolvedAlerts(ctx, alertGroup)
+		if errored > 0 {
+			http.Error(w, fmt.Sprintf("resolve failed for %d identities", errored), http.StatusInternalServerError)
+			return
+		}
 		h.logger.Debug("processed resolved-only alert group",
 			"group_key", alertGroup.GroupKey,
-			"resolved_count", resolved,
+			"resolved_count", updated,
 		)
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"resolved","reports_updated":%d}`, resolved)
+		_, _ = fmt.Fprintf(w, `{"status":"resolved","reports_updated":%d}`, updated)
 		return
 	}
 
-	// Also process resolved alerts in mixed groups (firing + resolved)
+	// Mixed group (firing + resolved): apply resolves first so the open-row
+	// lookup below sees the correct lifecycle state.
+	var errors []string
 	if alertGroup.Status == "firing" {
-		if resolved := h.handleResolvedAlerts(r.Context(), alertGroup); resolved > 0 {
-			h.logger.Info("resolved reports in mixed group", "resolved_count", resolved)
+		updated, errored := h.handleResolvedAlerts(ctx, alertGroup)
+		if updated > 0 {
+			h.logger.Info("resolved reports in mixed group", "resolved_count", updated)
+		}
+		if errored > 0 {
+			errors = append(errors, fmt.Sprintf("resolve failed for %d identities", errored))
 		}
 	}
 
@@ -160,26 +181,23 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		identitiesByStem[stem] = identity
 	}
 
-	ctx := r.Context()
-	var errors []string
 	workflowsSignaled := 0
+	flapsSkipped := 0
 
 	for stem, alerts := range alertsByStem {
 		identity := identitiesByStem[stem]
 
-		// 5-minute flap guard: if the prior incident for this identity was
-		// just resolved, treat the re-fire as alert noise and drop it.
-		if h.recentlyResolved(ctx, identity) {
-			h.logger.Info("dedup: skipping re-fire within 5min of resolution",
+		wfID, err := h.resolveWorkflowID(ctx, identity)
+		switch {
+		case stderrors.Is(err, ErrSkipFlap):
+			h.logger.Info("dedup: skipping re-fire within flap window",
 				"stem", stem,
 				"namespace", identity.Namespace,
 				"workload", identity.Name,
 			)
+			flapsSkipped++
 			continue
-		}
-
-		wfID, err := h.resolveWorkflowID(ctx, identity)
-		if err != nil {
+		case err != nil:
 			h.logger.Error("resolve workflow id failed",
 				"stem", stem,
 				"error", err,
@@ -209,6 +227,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"status":    "accepted",
 		"workflows": workflowsSignaled,
+		"skipped":   flapsSkipped,
 		"alerts":    len(firing),
 	}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -216,52 +235,44 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// recentlyResolved reports whether the incident identity was marked resolved
-// within the last 5 minutes — the alert-flap guard that suppresses immediate
-// re-fires. Returns false when no DB is configured or on query error (fail-
-// open so a transient DB blip doesn't drop genuine alerts).
-func (h *Handler) recentlyResolved(ctx context.Context, identity types.IncidentIdentity) bool {
-	if h.db == nil {
-		return false
-	}
-	var n int
-	if err := h.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM triage.reports
-		 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
-		   AND state = 'resolved' AND resolved_at > NOW() - INTERVAL '5 minutes'`,
-		identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
-	).Scan(&n); err != nil {
-		h.logger.Warn("flap-guard query failed, allowing alert",
-			"error", err,
-			"namespace", identity.Namespace,
-			"workload", identity.Name,
-		)
-		return false
-	}
-	return n > 0
-}
+// flapWindow is how long after an incident resolves we suppress new firings
+// for the same identity as alert noise. Tuned high enough to absorb typical
+// Alertmanager retry intervals, low enough that genuine same-day recurrences
+// are not lost.
+const flapWindow = 5 * time.Minute
+
+// stuckProcessingTTL is how long a row may sit in state='processing' before
+// the open-incident lookup treats it as orphaned (signalWithStart failed,
+// Alertmanager gave up retrying) and lets a new attempt take over. Matches
+// the Temporal WorkflowExecutionTimeout in signalWithStart so we don't wait
+// longer than Temporal itself.
+const stuckProcessingTTL = 15 * time.Minute
 
 // resolveWorkflowID picks the workflow_id that a firing alert for this
-// identity should signal. It also writes the preliminary report row in the
-// same transaction so the lifecycle dashboard sees the incident as soon as
-// the webhook returns.
+// identity should signal, and writes the preliminary report row in the same
+// transaction so the lifecycle dashboard sees the incident as soon as the
+// webhook returns. The whole sequence runs under a per-stem advisory lock so
+// concurrent webhook calls can't race on the answer.
 //
-// Selection rules:
+// Selection rules, applied in order:
 //
-//  1. If an open (state != 'resolved') row already exists for this identity,
-//     reuse its workflow_id. Re-fires of an in-progress incident dedupe
-//     into the same Temporal execution exactly as before this change.
-//  2. Otherwise mint a new workflow_id by appending an incremented attempt
-//     counter to the identity stem. The first attempt for any identity
-//     uses the unsuffixed stem so legacy rows continue to round-trip.
+//  1. If an open (state != 'resolved') row already exists for this identity
+//     and is not a stuck-processing orphan, reuse its workflow_id. Re-fires
+//     of an in-progress incident dedupe into the same Temporal execution.
+//  2. Otherwise, if the most recently-resolved row finished within
+//     flapWindow, return ErrSkipFlap. The caller drops the alert.
+//  3. Otherwise mint a new workflow_id by appending an incremented attempt
+//     counter to the identity stem. Attempt 1 uses the unsuffixed stem so
+//     every legacy row continues to round-trip.
 //
-// A per-stem advisory lock serializes minting so two concurrent re-fires
-// after a resolution cannot both pick the same attempt number, which would
-// otherwise leave one of them with a silently-rejected INSERT.
+// The transaction holds the per-stem advisory lock from before the open-row
+// lookup all the way through to the INSERT, so the resolve path (which takes
+// the same lock in handleResolvedAlerts) cannot interleave between "saw the
+// row as open" and "wrote the preliminary INSERT."
 //
-// When no DB is configured the function falls back to the legacy unsuffixed
-// stem so the webhook still works as a dumb Temporal trigger in tests and
-// in-memory deployments.
+// When no DB is configured the function falls back to the unsuffixed stem so
+// the webhook still works as a thin Temporal trigger in tests and in-memory
+// deployments.
 func (h *Handler) resolveWorkflowID(ctx context.Context, identity types.IncidentIdentity) (string, error) {
 	if h.db == nil {
 		return identity.WorkflowID(), nil
@@ -271,79 +282,106 @@ func (h *Handler) resolveWorkflowID(ctx context.Context, identity types.Incident
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer h.rollbackOnReturn(tx, identity.WorkflowID())
 
-	// Serialize per-stem so concurrent webhook calls can't both mint the
-	// same attempt suffix. Two-arg pg_advisory_xact_lock keys on a stable
-	// table-scoped namespace plus hashtext(stem); the lock releases on
-	// commit/rollback automatically.
-	if _, err := tx.ExecContext(ctx,
-		`SELECT pg_advisory_xact_lock($1, hashtext($2))`,
-		advisoryLockNamespace, identity.WorkflowID(),
-	); err != nil {
-		return "", fmt.Errorf("advisory lock: %w", err)
+	if err := h.acquireStemLock(ctx, tx, identity); err != nil {
+		return "", err
 	}
 
-	// Reuse the open incident's workflow_id if one exists.
+	// Reuse the open incident's workflow_id if one exists. A row stuck in
+	// 'processing' past stuckProcessingTTL is treated as orphaned — typically
+	// signalWithStart failed and Alertmanager has stopped retrying — so a
+	// new attempt is allowed to supersede it rather than jam the identity
+	// forever.
 	var openWfID string
 	err = tx.QueryRowContext(ctx,
 		`SELECT workflow_id FROM triage.reports
 		 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
 		   AND state != 'resolved'
+		   AND (state != 'processing' OR created_at > NOW() - $5::interval)
 		 ORDER BY created_at DESC
 		 LIMIT 1`,
 		identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
+		stuckProcessingTTL.String(),
 	).Scan(&openWfID)
 	switch {
 	case err == nil:
-		// Idempotent re-fire — caller will SignalWithStart the existing
-		// workflow ID. No new row needed; the row is already there.
 		if err := tx.Commit(); err != nil {
 			return "", fmt.Errorf("commit: %w", err)
 		}
 		return openWfID, nil
-	case err == sql.ErrNoRows:
-		// Fall through to mint a new attempt.
+	case stderrors.Is(err, sql.ErrNoRows):
+		// Fall through to flap check + mint.
 	default:
 		return "", fmt.Errorf("open-incident lookup: %w", err)
 	}
 
-	// No open incident — find the highest attempt seen historically and
-	// mint the next one. Parsing the suffix in Go (rather than SQL) keeps
-	// the encoding in one place: types.ParseAttempt.
-	rows, err := tx.QueryContext(ctx,
-		`SELECT workflow_id FROM triage.reports
-		 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4`,
+	// Flap guard: drop the alert if the most recent incident for this
+	// identity resolved within the window. Held under the lock so a resolve
+	// landing concurrently can't slip past us.
+	var lastResolvedRecent bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (
+		   SELECT 1 FROM triage.reports
+		   WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
+		     AND state = 'resolved' AND resolved_at > NOW() - $5::interval
+		 )`,
 		identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
-	)
-	if err != nil {
+		flapWindow.String(),
+	).Scan(&lastResolvedRecent); err != nil {
+		return "", fmt.Errorf("flap-guard lookup: %w", err)
+	}
+	if lastResolvedRecent {
+		if err := tx.Commit(); err != nil {
+			return "", fmt.Errorf("commit: %w", err)
+		}
+		return "", ErrSkipFlap
+	}
+
+	// Find the highest attempt seen historically and mint the next one.
+	// Attempts are monotonic, so the most recent row by created_at is the
+	// one to extend. The idx_reports_identity_created composite index backs
+	// this lookup.
+	var latestWfID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT workflow_id FROM triage.reports
+		 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
+		identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
+	).Scan(&latestWfID)
+	maxAttempt := 0
+	switch {
+	case err == nil:
+		_, maxAttempt = types.ParseAttempt(latestWfID)
+	case stderrors.Is(err, sql.ErrNoRows):
+		// First-ever fire — maxAttempt stays 0, so we'll mint attempt 1
+		// (the unsuffixed stem).
+	default:
 		return "", fmt.Errorf("attempt-history lookup: %w", err)
 	}
-	maxAttempt := 0
-	for rows.Next() {
-		var existing string
-		if err := rows.Scan(&existing); err != nil {
-			rows.Close()
-			return "", fmt.Errorf("scan attempt row: %w", err)
-		}
-		if _, n := types.ParseAttempt(existing); n > maxAttempt {
-			maxAttempt = n
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("iterate attempt rows: %w", err)
-	}
-	rows.Close()
 
 	wfID := identity.WorkflowIDForAttempt(maxAttempt + 1)
 
-	if _, err := tx.ExecContext(ctx,
+	// The advisory lock means no other transaction is minting the same
+	// suffix concurrently, so an ON CONFLICT here would indicate either a
+	// stale row this transaction's lookups did not see (replica lag, manual
+	// SQL, a row created outside the lock path) or a programming bug.
+	// Surface it as an error rather than silently signaling a workflow_id
+	// that may attach to a closed Temporal execution.
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO triage.reports (workflow_id, namespace, workload, kind, alert_name, state)
 		 VALUES ($1, $2, $3, $4, $5, 'processing')
 		 ON CONFLICT (workflow_id) DO NOTHING`,
 		wfID, identity.Namespace, identity.Name, identity.Kind, identity.AlertName,
-	); err != nil {
+	)
+	if err != nil {
 		return "", fmt.Errorf("insert preliminary report: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return "", fmt.Errorf("rows affected: %w", err)
+	} else if n == 0 {
+		return "", fmt.Errorf("preliminary insert conflict on %q — stale row outside the lock path", wfID)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -352,12 +390,38 @@ func (h *Handler) resolveWorkflowID(ctx context.Context, identity types.Incident
 	return wfID, nil
 }
 
-// advisoryLockNamespace is the first argument to the two-arg form of
-// pg_advisory_xact_lock. Picked to be distinct from the migration lock key
-// in activity/report.go (0x7472696167655F31, ASCII "triage_1") so the two
-// lock spaces can't collide. Value is arbitrary — replicas just need to
-// agree.
-const advisoryLockNamespace int32 = 0x74726961 // ASCII "tria"
+// acquireStemLock takes the per-stem advisory lock that serializes resolver
+// and resolver-of-resolved paths on the same identity. The lock is held for
+// the lifetime of tx.
+func (h *Handler) acquireStemLock(ctx context.Context, tx *sql.Tx, identity types.IncidentIdentity) error {
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		advisoryLockKey1, identity.WorkflowID(),
+	); err != nil {
+		return fmt.Errorf("advisory lock: %w", err)
+	}
+	return nil
+}
+
+// rollbackOnReturn is the deferred cleanup for every tx in this file. It
+// distinguishes the expected "already committed" no-op (sql.ErrTxDone) from
+// real rollback failures, which are logged so an abandoned tx holding the
+// stem lock is visible in operator logs.
+func (h *Handler) rollbackOnReturn(tx *sql.Tx, stem string) {
+	if err := tx.Rollback(); err != nil && !stderrors.Is(err, sql.ErrTxDone) {
+		h.logger.Warn("tx rollback failed; advisory lock may remain held until backend reaps the session",
+			"stem", stem,
+			"error", err,
+		)
+	}
+}
+
+// advisoryLockKey1 is the first argument to the two-arg form of
+// pg_advisory_xact_lock. The value is arbitrary — replicas just need to
+// agree. The migration code in activity/report.go uses the one-arg form
+// pg_advisory_lock(bigint), which lives in a separate Postgres lock space,
+// so no collision is possible regardless of this value.
+const advisoryLockKey1 int32 = 0x74726961 // ASCII "tria"
 
 func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity types.IncidentIdentity, alerts []types.Alert) error {
 	opts := client.StartWorkflowOptions{
@@ -398,21 +462,29 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-// handleResolvedAlerts marks reports as resolved for resolved alert groups.
-// Returns the number of reports updated.
+// handleResolvedAlerts marks reports as resolved for an alert group. It
+// returns (updated, errored): the count of rows transitioned and the count
+// of identities whose UPDATE failed. The caller must surface errored > 0 as
+// a 500 so Alertmanager retries — otherwise a transient DB blip would
+// permanently leave rows in 'processing', which jams the open-incident
+// lookup in resolveWorkflowID.
 //
-// The update keys on the identity stem rather than a reconstructed
-// workflow_id because, with the attempt-counter scheme, the webhook can't
-// know from Alertmanager's labels alone which attempt is currently open.
-// Resolving "whichever row is currently not resolved for this identity" is
-// what the operator means anyway: there is at most one such row at a time.
-func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGroup) int {
+// Each per-stem UPDATE runs under the same advisory lock that
+// resolveWorkflowID acquires, so a resolve cannot interleave between
+// resolveWorkflowID's open-row lookup and its INSERT.
+//
+// The UPDATE keys on the identity stem rather than a reconstructed
+// workflow_id because with the attempt-counter scheme the webhook can't
+// know from Alertmanager labels which attempt is currently open. The
+// stem-keyed predicate transitions whichever attempt is currently not
+// resolved for this identity — which is at most one row under the lock.
+func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGroup) (updated, errored int) {
 	if h.db == nil {
-		return 0
+		return 0, 0
 	}
 
-	// Dedup by identity stem (the WorkflowID() form) so two alerts
-	// resolving the same incident don't issue two UPDATEs.
+	// Dedup by identity stem so two alerts resolving the same incident don't
+	// issue two UPDATEs.
 	seen := make(map[string]types.IncidentIdentity)
 	for _, alert := range group.Alerts {
 		if alert.Status != "resolved" {
@@ -422,24 +494,53 @@ func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGro
 		seen[identity.WorkflowID()] = identity
 	}
 
-	updated := 0
 	for stem, identity := range seen {
-		result, err := h.db.ExecContext(ctx,
-			`UPDATE triage.reports SET resolved_at = NOW(), state = 'resolved'
-			 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
-			   AND state != 'resolved'`,
-			identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
-		)
+		n, err := h.resolveByStem(ctx, identity)
 		if err != nil {
 			h.logger.Error("failed to mark report resolved", "stem", stem, "error", err)
+			errored++
 			continue
 		}
-		if n, _ := result.RowsAffected(); n > 0 {
+		if n > 0 {
 			h.logger.Info("report resolved", "stem", stem, "rows", n)
-			updated += int(n)
+			updated += n
 		}
 	}
-	return updated
+	return updated, errored
+}
+
+// resolveByStem transitions whatever row is currently un-resolved for this
+// identity to state='resolved', under the same per-stem advisory lock that
+// resolveWorkflowID uses. Returns the number of rows affected.
+func (h *Handler) resolveByStem(ctx context.Context, identity types.IncidentIdentity) (int, error) {
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer h.rollbackOnReturn(tx, identity.WorkflowID())
+
+	if err := h.acquireStemLock(ctx, tx, identity); err != nil {
+		return 0, err
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE triage.reports SET resolved_at = NOW(), state = 'resolved'
+		 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
+		   AND state != 'resolved'`,
+		identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("update report: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return int(n), nil
 }
 
 func (h *Handler) handleReadyz(w http.ResponseWriter, _ *http.Request) {
