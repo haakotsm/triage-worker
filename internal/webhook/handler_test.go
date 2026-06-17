@@ -26,14 +26,14 @@ const (
 	openIncidentSQL = `SELECT workflow_id FROM triage.reports
 		 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
 		   AND state != 'resolved'
-		   AND (state != 'processing' OR created_at > NOW() - $5::interval)
+		   AND (state != 'processing' OR created_at > NOW() - make_interval(secs => $5))
 		 ORDER BY created_at DESC
 		 LIMIT 1`
 
 	flapGuardSQL = `SELECT EXISTS (
 		   SELECT 1 FROM triage.reports
 		   WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
-		     AND state = 'resolved' AND resolved_at > NOW() - $5::interval
+		     AND state = 'resolved' AND resolved_at > NOW() - make_interval(secs => $5)
 		 )`
 
 	attemptHistorySQL = `SELECT workflow_id FROM triage.reports
@@ -625,15 +625,17 @@ func testIdentity() types.IncidentIdentity {
 }
 
 // expectOpenLookup queues the open-incident SELECT expectation. The TTL
-// argument string mirrors what the resolver passes (e.g. "15m0s").
+// argument is passed to Postgres make_interval(secs => $5) as a float
+// seconds value — kept in lockstep with the production code via
+// stuckProcessingTTL.Seconds().
 func expectOpenLookup(mock sqlmock.Sqlmock, id types.IncidentIdentity) *sqlmock.ExpectedQuery {
 	return mock.ExpectQuery(regexp.QuoteMeta(openIncidentSQL)).
-		WithArgs(id.Namespace, id.Kind, id.Name, id.AlertName, stuckProcessingTTL.String())
+		WithArgs(id.Namespace, id.Kind, id.Name, id.AlertName, stuckProcessingTTL.Seconds())
 }
 
 func expectFlapGuard(mock sqlmock.Sqlmock, id types.IncidentIdentity) *sqlmock.ExpectedQuery {
 	return mock.ExpectQuery(regexp.QuoteMeta(flapGuardSQL)).
-		WithArgs(id.Namespace, id.Kind, id.Name, id.AlertName, flapWindow.String())
+		WithArgs(id.Namespace, id.Kind, id.Name, id.AlertName, flapWindow.Seconds())
 }
 
 func expectAttemptHistory(mock sqlmock.Sqlmock, id types.IncidentIdentity) *sqlmock.ExpectedQuery {
@@ -836,39 +838,36 @@ func TestResolveWorkflowID_PreliminaryInsertConflictIsError(t *testing.T) {
 	}
 }
 
-// A stuck 'processing' row older than the TTL must not appear as "open" —
-// the resolver should fall through to the flap+mint path so a new attempt
-// can take over.
-func TestResolveWorkflowID_StuckProcessingTTLBypass(t *testing.T) {
+// The stuckProcessingTTL value must be passed to make_interval(secs => $5)
+// as the duration's Seconds() — not the bare time.Duration. expectOpenLookup
+// pins this via WithArgs, so a regression that switches back to
+// duration.String() (which would silently mis-parse on Postgres) trips this
+// test. The TTL predicate's semantics themselves require a real Postgres to
+// verify — see the testcontainers follow-up.
+func TestResolveWorkflowID_PassesTTLArgAsSeconds(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
 
 	h := &Handler{logger: newTestLogger(), healthy: &atomic.Bool{}, db: db}
 	identity := testIdentity()
-	stem := identity.WorkflowID()
-	wantWfID := stem + "#2"
 
-	// The open-incident SELECT predicate excludes processing rows older than
-	// stuckProcessingTTL — so the test simulates that filter returning no
-	// match. (The TTL filter is enforced by the SQL itself; sqlmock can't
-	// evaluate `created_at > NOW() - $5` so we just assert the resolver
-	// proceeds to the mint path when the SELECT returns ErrNoRows.)
 	expectStemLock(mock, identity.WorkflowID())
-	expectOpenLookup(mock, identity).WillReturnError(sql.ErrNoRows)
-	expectFlapGuard(mock, identity).
+	// Pin: the open-incident SELECT receives stuckProcessingTTL.Seconds()
+	// as the 5th arg (the make_interval(secs => $5) parameter).
+	mock.ExpectQuery(regexp.QuoteMeta(openIncidentSQL)).
+		WithArgs(identity.Namespace, identity.Kind, identity.Name, identity.AlertName, stuckProcessingTTL.Seconds()).
+		WillReturnError(sql.ErrNoRows)
+	// And the flap-guard receives flapWindow.Seconds().
+	mock.ExpectQuery(regexp.QuoteMeta(flapGuardSQL)).
+		WithArgs(identity.Namespace, identity.Kind, identity.Name, identity.AlertName, flapWindow.Seconds()).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	expectAttemptHistory(mock, identity).
-		WillReturnRows(sqlmock.NewRows([]string{"workflow_id"}).AddRow(stem))
-	expectPreliminaryInsert(mock, wantWfID, identity).
+	expectAttemptHistory(mock, identity).WillReturnError(sql.ErrNoRows)
+	expectPreliminaryInsert(mock, identity.WorkflowID(), identity).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	got, err := h.resolveWorkflowID(t.Context(), identity)
-	if err != nil {
+	if _, err := h.resolveWorkflowID(t.Context(), identity); err != nil {
 		t.Fatalf("resolveWorkflowID: %v", err)
-	}
-	if got != wantWfID {
-		t.Errorf("workflow_id = %q, want %q", got, wantWfID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -916,6 +915,171 @@ func TestResolveWorkflowID_CommitError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "commit") {
 		t.Errorf("err = %v, want commit error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// Advisory-lock Exec failure must propagate; nothing else should run.
+func TestResolveWorkflowID_AdvisoryLockError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	h := &Handler{logger: newTestLogger(), healthy: &atomic.Bool{}, db: db}
+	identity := testIdentity()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(advisoryLockSQL)).
+		WithArgs(advisoryLockKey1, identity.WorkflowID()).
+		WillReturnError(fmt.Errorf("lock acquisition failed"))
+	mock.ExpectRollback()
+
+	_, err := h.resolveWorkflowID(t.Context(), identity)
+	if err == nil || !strings.Contains(err.Error(), "advisory lock") {
+		t.Errorf("err = %v, want advisory-lock error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// A non-ErrNoRows DB error on the open-incident lookup must NOT be treated
+// as "no row found" — that would let the resolver fall through to the mint
+// path and double-create attempts during a transient DB blip.
+func TestResolveWorkflowID_OpenLookupNonErrNoRowsError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	h := &Handler{logger: newTestLogger(), healthy: &atomic.Bool{}, db: db}
+	identity := testIdentity()
+
+	expectStemLock(mock, identity.WorkflowID())
+	expectOpenLookup(mock, identity).WillReturnError(fmt.Errorf("connection reset"))
+	mock.ExpectRollback()
+
+	_, err := h.resolveWorkflowID(t.Context(), identity)
+	if err == nil || !strings.Contains(err.Error(), "open-incident lookup") {
+		t.Errorf("err = %v, want open-incident-lookup error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// Flap-guard query failure propagates as an error rather than silently
+// allowing the alert through (the previous fail-open behaviour was removed
+// in the rework).
+func TestResolveWorkflowID_FlapGuardError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	h := &Handler{logger: newTestLogger(), healthy: &atomic.Bool{}, db: db}
+	identity := testIdentity()
+
+	expectStemLock(mock, identity.WorkflowID())
+	expectOpenLookup(mock, identity).WillReturnError(sql.ErrNoRows)
+	expectFlapGuard(mock, identity).WillReturnError(fmt.Errorf("query timeout"))
+	mock.ExpectRollback()
+
+	_, err := h.resolveWorkflowID(t.Context(), identity)
+	if err == nil || !strings.Contains(err.Error(), "flap-guard") {
+		t.Errorf("err = %v, want flap-guard error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// A non-ErrNoRows error on the attempt-history scan must surface so we
+// don't mint attempt 1 on top of an existing (but unreadable) row.
+func TestResolveWorkflowID_AttemptHistoryNonErrNoRowsError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	h := &Handler{logger: newTestLogger(), healthy: &atomic.Bool{}, db: db}
+	identity := testIdentity()
+
+	expectStemLock(mock, identity.WorkflowID())
+	expectOpenLookup(mock, identity).WillReturnError(sql.ErrNoRows)
+	expectFlapGuard(mock, identity).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	expectAttemptHistory(mock, identity).WillReturnError(fmt.Errorf("disk read error"))
+	mock.ExpectRollback()
+
+	_, err := h.resolveWorkflowID(t.Context(), identity)
+	if err == nil || !strings.Contains(err.Error(), "attempt-history lookup") {
+		t.Errorf("err = %v, want attempt-history-lookup error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// resolveByStem's BeginTx error must surface as errored>0 so the HTTP
+// handler returns 500. Sibling stems still run.
+func TestHandleResolvedAlerts_ResolveByStem_BeginTxError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	h := &Handler{logger: newTestLogger(), healthy: &atomic.Bool{}, db: db}
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{Status: "resolved", Labels: map[string]string{"alertname": "A", "namespace": "ns", "deployment": "app"}},
+			{Status: "resolved", Labels: map[string]string{"alertname": "B", "namespace": "ns", "deployment": "app"}},
+		},
+	}
+	idOK := types.DeriveIdentity(group.Alerts[1].Labels)
+
+	// Map iteration is non-deterministic — one stem's Begin fails, the
+	// other completes normally.
+	mock.MatchExpectationsInOrder(false)
+	mock.ExpectBegin().WillReturnError(fmt.Errorf("conn pool exhausted"))
+
+	expectStemLock(mock, idOK.WorkflowID())
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
+		WithArgs(idOK.Namespace, idOK.Kind, idOK.Name, idOK.AlertName).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	updated, errored := h.handleResolvedAlerts(t.Context(), group)
+	if errored != 1 {
+		t.Errorf("errored = %d, want 1", errored)
+	}
+	// updated could be 0 or 1 depending on which stem hit which expectation,
+	// but the failure tally must reach 1.
+	if updated > 1 {
+		t.Errorf("updated = %d, want <= 1", updated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// resolveByStem's Commit failure must propagate.
+func TestHandleResolvedAlerts_ResolveByStem_CommitError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	h := &Handler{logger: newTestLogger(), healthy: &atomic.Bool{}, db: db}
+	group := types.AlertGroup{
+		Status: "resolved",
+		Alerts: []types.Alert{
+			{Status: "resolved", Labels: map[string]string{"alertname": "X", "namespace": "ns", "deployment": "app"}},
+		},
+	}
+	identity := types.DeriveIdentity(group.Alerts[0].Labels)
+
+	expectStemLock(mock, identity.WorkflowID())
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
+		WithArgs(identity.Namespace, identity.Kind, identity.Name, identity.AlertName).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit().WillReturnError(fmt.Errorf("commit lost"))
+
+	updated, errored := h.handleResolvedAlerts(t.Context(), group)
+	if updated != 0 || errored != 1 {
+		t.Errorf("got (%d, %d), want (0, 1)", updated, errored)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

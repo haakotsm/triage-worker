@@ -241,12 +241,17 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // are not lost.
 const flapWindow = 5 * time.Minute
 
+// workflowExecutionTimeout caps how long a single triage Temporal workflow
+// may run. Used by signalWithStart and — derived from the same constant —
+// by stuckProcessingTTL so the two values can't drift independently.
+const workflowExecutionTimeout = 15 * time.Minute
+
 // stuckProcessingTTL is how long a row may sit in state='processing' before
 // the open-incident lookup treats it as orphaned (signalWithStart failed,
-// Alertmanager gave up retrying) and lets a new attempt take over. Matches
-// the Temporal WorkflowExecutionTimeout in signalWithStart so we don't wait
-// longer than Temporal itself.
-const stuckProcessingTTL = 15 * time.Minute
+// Alertmanager gave up retrying) and lets a new attempt take over. Bound to
+// workflowExecutionTimeout so a Temporal-side timeout and a DB-side bypass
+// fire at the same moment.
+const stuckProcessingTTL = workflowExecutionTimeout
 
 // resolveWorkflowID picks the workflow_id that a firing alert for this
 // identity should signal, and writes the preliminary report row in the same
@@ -298,11 +303,11 @@ func (h *Handler) resolveWorkflowID(ctx context.Context, identity types.Incident
 		`SELECT workflow_id FROM triage.reports
 		 WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
 		   AND state != 'resolved'
-		   AND (state != 'processing' OR created_at > NOW() - $5::interval)
+		   AND (state != 'processing' OR created_at > NOW() - make_interval(secs => $5))
 		 ORDER BY created_at DESC
 		 LIMIT 1`,
 		identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
-		stuckProcessingTTL.String(),
+		stuckProcessingTTL.Seconds(),
 	).Scan(&openWfID)
 	switch {
 	case err == nil:
@@ -324,10 +329,10 @@ func (h *Handler) resolveWorkflowID(ctx context.Context, identity types.Incident
 		`SELECT EXISTS (
 		   SELECT 1 FROM triage.reports
 		   WHERE namespace = $1 AND kind = $2 AND workload = $3 AND alert_name = $4
-		     AND state = 'resolved' AND resolved_at > NOW() - $5::interval
+		     AND state = 'resolved' AND resolved_at > NOW() - make_interval(secs => $5)
 		 )`,
 		identity.Namespace, identity.Kind, identity.Name, identity.AlertName,
-		flapWindow.String(),
+		flapWindow.Seconds(),
 	).Scan(&lastResolvedRecent); err != nil {
 		return "", fmt.Errorf("flap-guard lookup: %w", err)
 	}
@@ -392,7 +397,12 @@ func (h *Handler) resolveWorkflowID(ctx context.Context, identity types.Incident
 
 // acquireStemLock takes the per-stem advisory lock that serializes resolver
 // and resolver-of-resolved paths on the same identity. The lock is held for
-// the lifetime of tx.
+// the lifetime of tx — pg_advisory_xact_lock releases automatically on
+// commit or rollback.
+//
+// The lock key is derived from a 32-bit hashtext(stem); collisions are
+// possible but harmless — two unrelated identities would briefly serialize
+// on the same key, never corrupt each other.
 func (h *Handler) acquireStemLock(ctx context.Context, tx *sql.Tx, identity types.IncidentIdentity) error {
 	if _, err := tx.ExecContext(ctx,
 		`SELECT pg_advisory_xact_lock($1, hashtext($2))`,
@@ -407,9 +417,16 @@ func (h *Handler) acquireStemLock(ctx context.Context, tx *sql.Tx, identity type
 // distinguishes the expected "already committed" no-op (sql.ErrTxDone) from
 // real rollback failures, which are logged so an abandoned tx holding the
 // stem lock is visible in operator logs.
+//
+// On a non-ErrTxDone error the underlying transaction's state is unknown:
+// the connection may have died (the backend will roll back and release the
+// xact lock when it reaps the session) or the rollback itself failed on a
+// live connection (lock stays held until the connection is recycled).
+// Either way the lock will be released eventually, but possibly only after
+// the Postgres backend tears down the connection.
 func (h *Handler) rollbackOnReturn(tx *sql.Tx, stem string) {
 	if err := tx.Rollback(); err != nil && !stderrors.Is(err, sql.ErrTxDone) {
-		h.logger.Warn("tx rollback failed; advisory lock may remain held until backend reaps the session",
+		h.logger.Warn("tx rollback failed; per-stem advisory lock may remain held until the underlying transaction is aborted",
 			"stem", stem,
 			"error", err,
 		)
@@ -417,17 +434,24 @@ func (h *Handler) rollbackOnReturn(tx *sql.Tx, stem string) {
 }
 
 // advisoryLockKey1 is the first argument to the two-arg form of
-// pg_advisory_xact_lock. The value is arbitrary — replicas just need to
-// agree. The migration code in activity/report.go uses the one-arg form
-// pg_advisory_lock(bigint), which lives in a separate Postgres lock space,
-// so no collision is possible regardless of this value.
+// pg_advisory_xact_lock(int4, int4). The value is arbitrary — replicas
+// just need to agree. The migration code in activity/report.go uses the
+// one-arg form pg_advisory_lock(bigint), which lives in a separate
+// Postgres lock space, so no collision is possible regardless of this
+// value.
+//
+// The int32 type is load-bearing: it pins Postgres's overload resolution
+// to (int4, int4). Changing to int (which on amd64 is int64) would cause
+// the driver to send a bigint and Postgres would resolve to the one-arg
+// pg_advisory_xact_lock(bigint) overload — silently colliding with the
+// migration lock space.
 const advisoryLockKey1 int32 = 0x74726961 // ASCII "tria"
 
 func (h *Handler) signalWithStart(ctx context.Context, wfID string, identity types.IncidentIdentity, alerts []types.Alert) error {
 	opts := client.StartWorkflowOptions{
 		ID:                       wfID,
 		TaskQueue:                h.taskQueue,
-		WorkflowExecutionTimeout: 15 * time.Minute,
+		WorkflowExecutionTimeout: workflowExecutionTimeout,
 		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 	}
 
@@ -476,8 +500,11 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // The UPDATE keys on the identity stem rather than a reconstructed
 // workflow_id because with the attempt-counter scheme the webhook can't
 // know from Alertmanager labels which attempt is currently open. The
-// stem-keyed predicate transitions whichever attempt is currently not
-// resolved for this identity — which is at most one row under the lock.
+// stem-keyed predicate (state != 'resolved') transitions every open row
+// for this identity in one shot — normally one row, but a stuck-processing
+// orphan from a prior signalWithStart failure can coexist with a freshly
+// minted attempt during the stuckProcessingTTL bypass window, and resolving
+// both at once is the desired behaviour.
 func (h *Handler) handleResolvedAlerts(ctx context.Context, group types.AlertGroup) (updated, errored int) {
 	if h.db == nil {
 		return 0, 0
