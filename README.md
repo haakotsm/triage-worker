@@ -77,7 +77,9 @@ docker run -p 8080:8080 triage-worker
 
 ### Dashboard CSS
 
-Tailwind + daisyUI styles are pre-built into `internal/web/static/output.css` and embedded via `go:embed`. The runtime container ships no Node.js. To regenerate the stylesheet after editing templates:
+Tailwind + daisyUI styles are embedded via `go:embed` from `internal/web/static/output.css`. The Docker build regenerates this file from `.css-build/` on every image build (multi-stage with `node:22-alpine`), so the deployed image always matches the templates.
+
+The runtime container itself ships no Node.js. The committed `output.css` is used by `go run` for local dev only — it may drift from templates between Docker builds. To refresh it locally:
 
 ```bash
 cd .css-build
@@ -85,7 +87,7 @@ npm install
 npx @tailwindcss/cli -i app.css -o ../internal/web/static/output.css --minify
 ```
 
-The `.css-build/` directory is gitignored — only `output.css` is checked in.
+`.css-build/node_modules/` is gitignored; the build config (`package.json`, `app.css`) is tracked.
 
 ## Test Scenarios
 

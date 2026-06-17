@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+@source "../internal/web/templates/**/*.html";
+
+@plugin "daisyui" {
+  themes: luxury --default;
+}
