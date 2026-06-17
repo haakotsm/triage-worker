@@ -1,11 +1,11 @@
 FROM node:22-alpine AS css-builder
 
 WORKDIR /src
-COPY .css-build/ ./.css-build/
+COPY .css-build/package.json .css-build/package-lock.json ./.css-build/
+RUN cd .css-build && npm ci --no-audit --no-fund
+COPY .css-build/app.css ./.css-build/
 COPY internal/web/templates/ ./internal/web/templates/
-RUN cd .css-build \
-  && npm install --no-audit --no-fund \
-  && npx @tailwindcss/cli -i app.css -o /output.css --minify
+RUN cd .css-build && npx @tailwindcss/cli -i app.css -o /output.css --minify
 
 # ---
 FROM golang:1.26-alpine AS builder
