@@ -293,6 +293,21 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		-- Index for acknowledged incidents lookup.
 		CREATE INDEX IF NOT EXISTS idx_reports_assigned_to ON triage.reports (assigned_to) WHERE assigned_to IS NOT NULL;
 
+		-- Partial index for the webhook's "is there an open incident for this
+		-- identity stem?" lookup on every firing alert. At most one row per
+		-- identity satisfies the predicate, so the index is small and the
+		-- lookup is O(1) regardless of how many historical resolved rows the
+		-- table accumulates.
+		CREATE INDEX IF NOT EXISTS idx_reports_identity_open
+			ON triage.reports (namespace, kind, workload, alert_name)
+			WHERE state != 'resolved';
+
+		-- Composite index for the webhook's "highest attempt seen for this
+		-- identity" lookup when minting a new attempt counter after the
+		-- previous incident was resolved, and for the retriage cap query.
+		CREATE INDEX IF NOT EXISTS idx_reports_identity_created
+			ON triage.reports (namespace, kind, workload, alert_name, created_at DESC);
+
 		-- Backfill state for existing rows that were resolved before state tracking.
 		UPDATE triage.reports SET state = 'resolved' WHERE resolved_at IS NOT NULL AND state = 'reported';
 

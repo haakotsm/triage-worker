@@ -2,9 +2,16 @@ package types
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// AttemptDelimiter separates an incident identity stem from its attempt
+// counter inside a workflow_id. The character must be one that sanitization
+// rejects so it cannot appear inside a stem segment (see SanitizeK8sName and
+// SanitizeLabelValue), which keeps ParseAttempt unambiguous.
+const AttemptDelimiter = "#"
 
 var (
 	// safeK8sName matches valid Kubernetes DNS label names (RFC 1123).
@@ -218,9 +225,37 @@ type IncidentIdentity struct {
 	AlertName string
 }
 
-// WorkflowID returns the Temporal workflow ID for this incident.
+// WorkflowID returns the identity stem — the workflow ID for the first
+// attempt at triaging this incident. Subsequent attempts (after the prior
+// incident for this identity was resolved) use WorkflowIDForAttempt.
 func (id IncidentIdentity) WorkflowID() string {
 	return "triage/" + id.Namespace + "/" + id.Kind + "/" + id.Name + "/" + id.AlertName
+}
+
+// WorkflowIDForAttempt returns the Temporal workflow ID for the n-th attempt
+// at this incident. Attempt 1 is the unsuffixed stem so legacy rows created
+// before the attempt counter existed continue to round-trip correctly.
+func (id IncidentIdentity) WorkflowIDForAttempt(n int) string {
+	if n <= 1 {
+		return id.WorkflowID()
+	}
+	return id.WorkflowID() + AttemptDelimiter + strconv.Itoa(n)
+}
+
+// ParseAttempt splits a workflow_id into its identity stem and attempt
+// counter. Stems without a delimiter are attempt 1. A trailing delimiter
+// with a non-numeric or non-positive value is treated as part of the stem
+// — the safe fallback for any unexpected ID shape.
+func ParseAttempt(wfID string) (stem string, attempt int) {
+	i := strings.LastIndex(wfID, AttemptDelimiter)
+	if i < 0 {
+		return wfID, 1
+	}
+	n, err := strconv.Atoi(wfID[i+len(AttemptDelimiter):])
+	if err != nil || n < 1 {
+		return wfID, 1
+	}
+	return wfID[:i], n
 }
 
 // DeriveIdentity extracts incident identity from alert labels.
