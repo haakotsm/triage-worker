@@ -83,11 +83,11 @@ The runtime container itself ships no Node.js. The committed `output.css` is use
 
 ```bash
 cd .css-build
-npm install
+npm ci
 npx @tailwindcss/cli -i app.css -o ../internal/web/static/output.css --minify
 ```
 
-`.css-build/node_modules/` is gitignored; the build config (`package.json`, `app.css`) is tracked.
+`.css-build/node_modules/` is gitignored; `package.json`, `package-lock.json`, and `app.css` are tracked so both Docker and local rebuilds use byte-identical transitive deps.
 
 ## Test Scenarios
 
