@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	AlertSignalName      = "alert"
-	CorrelationDebounce  = 60 * time.Second
-	CorrelationHardCap   = 5 * time.Minute
+	AlertSignalName     = "alert"
+	CorrelationDebounce = 60 * time.Second
+	CorrelationHardCap  = 5 * time.Minute
 )
 
 // TriageWorkflow orchestrates alert correlation, enrichment, and AI diagnosis.
@@ -130,9 +130,10 @@ func TriageWorkflow(ctx workflow.Context, params types.TriageParams) (types.Tria
 		SeverityKey.ValueSet(report.Severity),
 	)
 
-	// --- Step 3.5: Append L1 diagnostic commands ---
-	l1Cmds := types.L1Commands(report.Classification, params.Identity)
-	report.Recommendations = append(report.Recommendations, l1Cmds...)
+	// --- Step 3.5: Append verification commands (seeded by the agent's
+	// findings + enrichment, targeting the alerts' real pods) ---
+	verifyCmds := types.VerificationCommands(report, params.Identity, enrichment, alerts)
+	report.Recommendations = append(report.Recommendations, verifyCmds...)
 
 	// --- Step 3.6: Compute summary and normalize recommendations ---
 	types.NormalizeSummary(params.Identity, &report)

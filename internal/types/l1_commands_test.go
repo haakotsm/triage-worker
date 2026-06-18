@@ -5,116 +5,140 @@ import (
 	"testing"
 )
 
-func TestL1Commands_CrashLoop(t *testing.T) {
-	id := IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "my-app", AlertName: "KubePodCrashLooping"}
-	cmds := L1Commands("CrashLoop", id)
-
-	if len(cmds) < 4 {
-		t.Fatalf("expected at least 4 commands for CrashLoop, got %d", len(cmds))
-	}
-
-	// All should have "none" risk (L1 = read-only)
-	for _, cmd := range cmds {
-		if cmd.Risk != "none" {
-			t.Errorf("L1 command %q has risk=%q, want 'none'", cmd.Action, cmd.Risk)
-		}
-	}
-
-	// Should include --previous flag for crash loop
-	found := false
-	for _, cmd := range cmds {
-		if strings.Contains(cmd.Command, "--previous") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("CrashLoop commands should include --previous log flag")
-	}
+func alertWithPod(pod string) Alert {
+	return Alert{Status: "firing", Labels: map[string]string{"pod": pod}}
 }
 
-func TestL1Commands_OOM(t *testing.T) {
-	id := IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "app"}
-	cmds := L1Commands("OOM", id)
-
-	found := false
-	for _, cmd := range cmds {
-		if strings.Contains(cmd.Command, "resources.limits.memory") || strings.Contains(cmd.Command, "top pods") {
-			found = true
+func findCmd(cmds []Recommendation, substr string) (Recommendation, bool) {
+	for _, c := range cmds {
+		if strings.Contains(c.Command, substr) {
+			return c, true
 		}
 	}
-	if !found {
-		t.Error("OOM commands should include memory limit check")
-	}
+	return Recommendation{}, false
 }
 
-func TestL1Commands_Network(t *testing.T) {
-	id := IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "app"}
-	cmds := L1Commands("Network", id)
-
-	found := false
-	for _, cmd := range cmds {
-		if strings.Contains(cmd.Command, "networkpolicy") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("Network commands should check NetworkPolicies")
-	}
-}
-
-func TestL1Commands_ImagePull(t *testing.T) {
-	id := IncidentIdentity{Namespace: "staging", Kind: "Deployment", Name: "frontend"}
-	cmds := L1Commands("ImagePull", id)
-
-	found := false
-	for _, cmd := range cmds {
-		if strings.Contains(cmd.Command, "image") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("ImagePull commands should verify image reference")
-	}
-}
-
-func TestL1Commands_Unknown(t *testing.T) {
-	id := IncidentIdentity{Namespace: "default", Kind: "Pod", Name: "orphan"}
-	cmds := L1Commands("Unknown", id)
-
-	// Should still return base commands
-	if len(cmds) < 3 {
-		t.Fatalf("expected at least 3 base commands, got %d", len(cmds))
-	}
-}
-
-func TestL1Commands_AllRiskNoneOrLow(t *testing.T) {
-	classifications := []string{"CrashLoop", "OOM", "Network", "ImagePull", "ResourceExhaustion", "Config", "Scheduling", "Unknown"}
+func TestVerificationCommands_AllReadOnlyTaggedAndExplained(t *testing.T) {
 	id := IncidentIdentity{Namespace: "ns", Kind: "Deployment", Name: "app"}
-
-	for _, c := range classifications {
-		cmds := L1Commands(c, id)
+	for _, c := range []string{"CrashLoop", "OOM", "Network", "ImagePull", "ResourceExhaustion", "Config", "Scheduling", "Unknown"} {
+		cmds := VerificationCommands(TriageReport{Classification: c}, id, EnrichmentResult{}, nil)
+		if len(cmds) == 0 {
+			t.Fatalf("classification %q produced no commands", c)
+		}
 		for _, cmd := range cmds {
 			if cmd.Risk != "none" && cmd.Risk != "low" {
-				t.Errorf("classification=%q action=%q: risk=%q, want 'none' or 'low'", c, cmd.Action, cmd.Risk)
+				t.Errorf("%s/%q: risk=%q, want none/low (read-only)", c, cmd.Action, cmd.Risk)
+			}
+			if cmd.Source != "l1" {
+				t.Errorf("%s/%q: source=%q, want l1", c, cmd.Action, cmd.Source)
+			}
+			if cmd.Expected == "" {
+				t.Errorf("%s/%q: Expected is empty (every verification step should say what it confirms)", c, cmd.Action)
 			}
 		}
 	}
 }
 
-func TestL1Commands_AllHaveSourceAndExpected(t *testing.T) {
-	classifications := []string{"CrashLoop", "OOM", "Network", "ImagePull", "ResourceExhaustion", "Config", "Scheduling", "Unknown"}
-	id := IncidentIdentity{Namespace: "ns", Kind: "Deployment", Name: "app"}
+func TestVerificationCommands_TargetsRealPods(t *testing.T) {
+	cmds := VerificationCommands(
+		TriageReport{Classification: "CrashLoop"},
+		IncidentIdentity{Namespace: "prod", Kind: "Deployment", Name: "api"},
+		EnrichmentResult{},
+		[]Alert{alertWithPod("api-7c9f-abcde"), alertWithPod("api-7c9f-fghij")},
+	)
 
-	for _, c := range classifications {
-		cmds := L1Commands(c, id)
-		for _, cmd := range cmds {
-			if cmd.Source != "l1" {
-				t.Errorf("classification=%q action=%q: source=%q, want 'l1'", c, cmd.Action, cmd.Source)
-			}
-			if cmd.Expected == "" {
-				t.Errorf("classification=%q action=%q: expected is empty", c, cmd.Action)
-			}
-		}
+	status, ok := findCmd(cmds, "kubectl get pods")
+	if !ok {
+		t.Fatal("missing pod status command")
+	}
+	if !strings.Contains(status.Command, "api-7c9f-abcde") || !strings.Contains(status.Command, "api-7c9f-fghij") {
+		t.Errorf("status command should target both real pods, got %q", status.Command)
+	}
+	if strings.Contains(status.Command, "-l app=") {
+		t.Errorf("should not fall back to a selector when pods are known: %q", status.Command)
+	}
+
+	logs, ok := findCmd(cmds, "kubectl logs")
+	if !ok {
+		t.Fatal("CrashLoop should include a logs command")
+	}
+	if !strings.Contains(logs.Command, "api-7c9f-abcde") {
+		t.Errorf("logs should target the first real pod (logs takes one), got %q", logs.Command)
+	}
+	if !strings.Contains(logs.Command, "--previous") {
+		t.Errorf("CrashLoop logs should use --previous, got %q", logs.Command)
+	}
+}
+
+func TestVerificationCommands_FallsBackToSelector(t *testing.T) {
+	cmds := VerificationCommands(
+		TriageReport{Classification: "OOM"},
+		IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "worker"},
+		EnrichmentResult{},
+		nil, // no alerts → no real pod names
+	)
+	status, ok := findCmd(cmds, "kubectl get pods")
+	if !ok {
+		t.Fatal("missing pod status command")
+	}
+	if !strings.Contains(status.Command, "-l app=worker") {
+		t.Errorf("with no real pods, should fall back to label selector, got %q", status.Command)
+	}
+}
+
+func TestVerificationCommands_ReferencesObservedFacts(t *testing.T) {
+	cmds := VerificationCommands(
+		TriageReport{Classification: "OOM"},
+		IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "cache"},
+		EnrichmentResult{
+			Kubernetes: KubernetesResult{Available: true, PodPhase: "Running", ExitCodes: []int32{137}},
+			Prometheus: PrometheusResult{Available: true, MemoryPct: 92, RestartRate: 3.5},
+		},
+		[]Alert{alertWithPod("cache-0")},
+	)
+
+	exit, ok := findCmd(cmds, "lastState.terminated.exitCode")
+	if !ok {
+		t.Fatal("expected an exit-code verification command")
+	}
+	if !strings.Contains(exit.Expected, "137") {
+		t.Errorf("exit-code Expected should cite the observed code 137, got %q", exit.Expected)
+	}
+
+	usage, ok := findCmd(cmds, "top pods")
+	if !ok {
+		t.Fatal("expected a memory-usage command for OOM")
+	}
+	if !strings.Contains(usage.Expected, "92%") {
+		t.Errorf("memory Expected should cite the observed 92%%, got %q", usage.Expected)
+	}
+
+	restart, ok := findCmd(cmds, "restartCount")
+	if !ok {
+		t.Fatal("expected a restart-count command when restart rate observed")
+	}
+	if !strings.Contains(restart.Expected, "3.5") {
+		t.Errorf("restart Expected should cite the observed rate 3.5, got %q", restart.Expected)
+	}
+
+	status, _ := findCmd(cmds, "kubectl get pods")
+	if !strings.Contains(status.Expected, "Running") {
+		t.Errorf("status Expected should cite the observed pod phase, got %q", status.Expected)
+	}
+}
+
+func TestVerificationCommands_NetworkCorroboration(t *testing.T) {
+	cmds := VerificationCommands(
+		TriageReport{Classification: "Network"},
+		IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "gw"},
+		EnrichmentResult{},
+		nil,
+	)
+	if _, ok := findCmd(cmds, "networkpolicy"); !ok {
+		t.Error("Network classification should include a NetworkPolicy check")
+	}
+	if _, ok := findCmd(cmds, "endpoints"); !ok {
+		t.Error("Network classification should include an endpoints check")
 	}
 }
 
@@ -131,8 +155,7 @@ func TestKindToResource(t *testing.T) {
 		{"Unknown", "pod"},
 	}
 	for _, tt := range tests {
-		got := kindToResource(tt.kind)
-		if got != tt.want {
+		if got := kindToResource(tt.kind); got != tt.want {
 			t.Errorf("kindToResource(%q) = %q, want %q", tt.kind, got, tt.want)
 		}
 	}
