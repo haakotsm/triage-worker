@@ -19,14 +19,12 @@
     }
   });
 
-  // --- Alpine re-initialization after htmx swaps ---
-  // Alpine's MutationObserver handles most cases, but explicit initTree
-  // ensures deterministic initialization for outerHTML swaps.
+  // --- Focus restoration after htmx swaps ---
+  // Alpine's MutationObserver initializes swapped-in nodes on its own, so no
+  // explicit Alpine.initTree is needed here (and evt.detail.elt is the
+  // requesting element, which for outerHTML swaps is already detached).
   document.addEventListener("htmx:afterSwap", function (evt) {
     var elt = evt.detail.elt;
-    if (window.Alpine && elt) {
-      Alpine.initTree(elt);
-    }
     // Only restore focus for main-content or detail-container swaps
     if (elt && (elt.id === "main-content" || elt.id === "detail-container")) {
       var focusable = elt.querySelector(
