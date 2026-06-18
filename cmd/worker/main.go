@@ -163,6 +163,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			logger.Info("SSE broker started")
 		}
 
+		// Operator-initiated re-triage: start a fresh TriageWorkflow for an
+		// existing incident from the dashboard.
+		wh.SetRetrieveStarter(workflow.NewRetriageStarter(tc, db, taskQueue, logger))
+		logger.Info("re-triage enabled")
+
 		devMode := os.Getenv("DEV_MODE") == "true"
 		authMW := web.NewAuthMiddleware(logger, devMode)
 		csrfMW := web.NewCSRFMiddleware(logger)

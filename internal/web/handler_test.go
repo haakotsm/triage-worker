@@ -299,6 +299,26 @@ func TestDashboardContent_IsRealDashboardNotReportTable(t *testing.T) {
 	}
 }
 
+func TestHandleRetriage_NotConfiguredHTMX(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	// retriage starter is not wired (h.retriage == nil). For htmx this must be a
+	// 200 + toast, not a discarded 503.
+	req := httptest.NewRequest("POST", "/api/incidents/1/retriage", nil)
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "not configured") {
+		t.Errorf("HX-Trigger = %q, want the not-configured message", got)
+	}
+}
+
 func TestBuildTimeline(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {

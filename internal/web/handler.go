@@ -1193,12 +1193,9 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/incidents/"+idStr, http.StatusSeeOther)
 }
 
-// handleRetriage triggers a re-triage workflow for an existing incident.
-//
-// NOTE: this endpoint is not yet wired to any UI control, so it still returns
-// raw JSON / non-2xx errors rather than going through hxError/hxStateConflict
-// like the other action handlers. When the Retriage button is added (UI audit
-// task #4), migrate these error paths to the htmx-aware helpers for parity.
+// handleRetriage triggers a re-triage workflow for an existing incident. It
+// mints a new attempt for the incident's identity and starts a fresh
+// TriageWorkflow; the original incident is left untouched.
 func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1206,13 +1203,13 @@ func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.retriage == nil {
-		http.Error(w, `{"error":"re-triage not configured"}`, http.StatusServiceUnavailable)
+		h.hxError(w, r, http.StatusServiceUnavailable, "re-triage is not configured")
 		return
 	}
 
 	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/retriage")
 	if err != nil {
-		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "invalid incident ID")
 		return
 	}
 
@@ -1223,28 +1220,33 @@ func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 		 FROM triage.reports WHERE id = $1`, id).
 		Scan(&workflowID, &namespace, &workload, &kind, &alertName, &state)
 	if err != nil {
-		http.Error(w, `{"error":"incident not found"}`, http.StatusNotFound)
+		h.hxError(w, r, http.StatusNotFound, "incident not found")
 		return
 	}
 
-	// Cannot re-triage a processing incident (already running).
+	// Cannot re-triage a processing incident (already running). Re-render the
+	// action-bar so the operator sees the current processing state.
 	if state == "processing" {
-		http.Error(w, `{"error":"incident is already being processed"}`, http.StatusConflict)
+		h.hxStateConflict(w, r, id, "Incident is already being processed")
 		return
 	}
 
-	// Enforce re-triage cap: max 3 versions per workload identity.
-	var retriageCount int
+	// Enforce re-triage cap: limit the number of still-active (unresolved)
+	// attempts per identity. Counting all history would permanently block
+	// re-triage for any frequently-alerting workload, since reports are never
+	// deleted.
+	var activeVersions int
 	if err := h.db.QueryRowContext(r.Context(),
 		`SELECT COUNT(*) FROM triage.reports
-		 WHERE namespace = $1 AND workload = $2 AND kind = $3 AND alert_name = $4`,
-		namespace, workload, kind, alertName).Scan(&retriageCount); err != nil {
+		 WHERE namespace = $1 AND workload = $2 AND kind = $3 AND alert_name = $4
+		   AND state != 'resolved'`,
+		namespace, workload, kind, alertName).Scan(&activeVersions); err != nil {
 		h.logger.Error("retriage cap query failed", "error", err, "incident_id", id)
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		h.hxError(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if retriageCount >= 3 {
-		http.Error(w, `{"error":"re-triage limit reached (max 3)"}`, http.StatusTooManyRequests)
+	if activeVersions >= 3 {
+		h.hxError(w, r, http.StatusTooManyRequests, "re-triage limit reached (max 3 active versions)")
 		return
 	}
 
@@ -1252,11 +1254,20 @@ func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 	newWfID, err := h.retriage.StartRetriage(r.Context(), workflowID, namespace, workload, kind, alertName)
 	if err != nil {
 		h.logger.Error("start retriage", "error", err, "incident_id", id)
-		http.Error(w, `{"error":"failed to start re-triage"}`, http.StatusInternalServerError)
+		h.hxError(w, r, http.StatusInternalServerError, "failed to start re-triage")
 		return
 	}
 
 	h.logger.Info("retriage started", "incident_id", id, "new_workflow_id", newWfID)
+
+	// htmx: the original incident is unchanged, so don't swap — just toast. The
+	// new 'processing' incident appears on the dashboard via SSE.
+	if isHTMX(r) {
+		w.Header().Set("HX-Reswap", "none")
+		w.Header().Set("HX-Trigger", toastTrigger("success", "Re-triage started — a new incident is now processing"))
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

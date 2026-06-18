@@ -39,5 +39,56 @@
     </div>
 
   </div>
+
+  {{/* ═══ ROW 3: All Reports (searchable history) ═══ */}}
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title text-lg">All Reports</h2>
+
+      {{/* Filter toolbar. These inputs live OUTSIDE #report-list so they
+           persist across table swaps; the sort headers / pagination inside the
+           table hx-include them by name. Changing a filter resets to page 1
+           (no offset sent). */}}
+      <div class="flex flex-wrap items-end gap-3 mb-2">
+        <div class="form-control">
+          <label for="report-search" class="label py-1"><span class="label-text text-xs">Search</span></label>
+          <input id="report-search" type="search" name="search" value="{{.Query}}"
+                 placeholder="workload, namespace or alert…"
+                 class="input input-bordered input-sm w-64 max-w-full"
+                 hx-get="/partials/reports" hx-target="#report-list" hx-swap="outerHTML"
+                 hx-trigger="input changed delay:400ms, search"
+                 hx-include="[name='severity'],[name='status'],[name='sort'],[name='dir']"
+                 hx-indicator="#page-loader">
+        </div>
+        <div class="form-control">
+          <label for="report-severity" class="label py-1"><span class="label-text text-xs">Severity</span></label>
+          <select id="report-severity" name="severity" class="select select-bordered select-sm"
+                  hx-get="/partials/reports" hx-target="#report-list" hx-swap="outerHTML"
+                  hx-trigger="change"
+                  hx-include="[name='search'],[name='status'],[name='sort'],[name='dir']"
+                  hx-indicator="#page-loader">
+            <option value="" {{if eq .Severity ""}}selected{{end}}>All severities</option>
+            <option value="critical" {{if eq .Severity "critical"}}selected{{end}}>Critical</option>
+            <option value="warning" {{if eq .Severity "warning"}}selected{{end}}>Warning</option>
+            <option value="info" {{if eq .Severity "info"}}selected{{end}}>Info</option>
+          </select>
+        </div>
+        <div class="form-control">
+          <label for="report-status" class="label py-1"><span class="label-text text-xs">Status</span></label>
+          <select id="report-status" name="status" class="select select-bordered select-sm"
+                  hx-get="/partials/reports" hx-target="#report-list" hx-swap="outerHTML"
+                  hx-trigger="change"
+                  hx-include="[name='search'],[name='severity'],[name='sort'],[name='dir']"
+                  hx-indicator="#page-loader">
+            <option value="" {{if eq .Status ""}}selected{{end}}>Active + recent</option>
+            <option value="active" {{if eq .Status "active"}}selected{{end}}>Active only</option>
+            <option value="resolved" {{if eq .Status "resolved"}}selected{{end}}>Resolved</option>
+          </select>
+        </div>
+      </div>
+
+      {{template "report-table" .}}
+    </div>
+  </div>
 </div>
 {{end}}
