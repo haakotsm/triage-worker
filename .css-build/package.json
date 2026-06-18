@@ -3,8 +3,8 @@
   "private": true,
   "description": "Build-only workspace for generating internal/web/static/output.css. Not shipped at runtime.",
   "devDependencies": {
-    "@tailwindcss/cli": "4.3.0",
-    "tailwindcss": "4.3.0",
-    "daisyui": "5.0.0"
+    "@tailwindcss/cli": "4.3.1",
+    "tailwindcss": "4.3.1",
+    "daisyui": "5.5.23"
   }
 }
