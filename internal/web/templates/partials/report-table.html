@@ -55,7 +55,7 @@
       </thead>
       <tbody>
         {{range .Reports}}
-        <tr class="hover cursor-pointer" tabindex="0"
+        <tr class="row-hover cursor-pointer" tabindex="0"
             aria-label="View incident: {{.AlertName}} on {{.Workload}}"
             hx-get="/incidents/{{.ID}}" hx-target="#main-content" hx-push-url="true"
             hx-indicator="#page-loader"
