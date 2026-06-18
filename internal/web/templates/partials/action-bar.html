@@ -12,27 +12,27 @@
       </div>
       <div class="flex items-center gap-2 relative" x-data="{ showResolve: false }">
         {{if or (eq .Report.State "processing") (eq .Report.State "reported")}}
-        <button class="btn btn-sm btn-primary"
+        <button class="btn btn-sm btn-primary gap-2"
                 hx-post="/api/incidents/{{.Report.ID}}/acknowledge"
                 hx-target="#action-bar"
                 hx-swap="outerHTML"
                 hx-indicator=".action-spinner"
                 aria-label="Acknowledge this incident">
-          👤 Acknowledge
+          {{icon "user"}} Acknowledge
         </button>
         {{end}}
         {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
-        <button class="btn btn-sm btn-success"
+        <button class="btn btn-sm btn-success gap-2"
                 @click="showResolve = !showResolve"
                 :aria-expanded="showResolve"
                 aria-haspopup="dialog"
                 aria-controls="resolve-popover"
                 aria-label="Resolve this incident">
-          ✓ Resolve
+          {{icon "check"}} Resolve
         </button>
         {{end}}
         {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
-        <button class="btn btn-sm btn-warning btn-outline"
+        <button class="btn btn-sm btn-warning btn-outline gap-2"
                 hx-post="/api/incidents/{{.Report.ID}}/escalate"
                 hx-target="#action-bar"
                 hx-swap="outerHTML"
@@ -41,18 +41,18 @@
                 hx-ext="json-enc"
                 hx-vals='{"level":"L2","target":"oncall"}'
                 aria-label="Escalate this incident">
-          ⬆ Escalate
+          {{icon "arrow-up"}} Escalate
         </button>
         {{end}}
         {{if ne .Report.State "processing"}}
-        <button class="btn btn-sm btn-ghost"
+        <button class="btn btn-sm btn-ghost gap-2"
                 hx-post="/api/incidents/{{.Report.ID}}/retriage"
                 hx-target="#action-bar"
                 hx-swap="outerHTML"
                 hx-confirm="Re-run triage analysis for this incident? This starts a new triage attempt."
                 hx-indicator=".action-spinner"
                 aria-label="Re-triage this incident">
-          🔄 Re-triage
+          {{icon "refresh"}} Re-triage
         </button>
         {{end}}
         <span class="loading loading-spinner loading-xs action-spinner htmx-indicator"></span>
