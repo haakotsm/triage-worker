@@ -1,5 +1,5 @@
 {{define "action-bar"}}
-<div id="action-bar" class="card bg-base-100 border border-base-300 border-l-4 {{if eq .Report.State "reported"}}border-error{{else if eq .Report.State "acknowledged"}}border-info{{else if eq .Report.State "resolved"}}border-success{{else}}border-base-content/20{{end}}">
+<div id="action-bar" class="card bg-base-100 border border-base-300 border-l-4 {{if eq .Report.State "reported"}}border-l-error{{else if eq .Report.State "acknowledged"}}border-l-info{{else if eq .Report.State "resolved"}}border-l-success{{else}}border-l-base-content/20{{end}}">
   <div class="card-body py-3">
     <div class="flex items-center justify-between flex-wrap gap-3">
       <div class="flex items-center gap-2">

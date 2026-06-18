@@ -53,7 +53,7 @@
   {{/* ═══ STATE-ADAPTIVE CONTENT ═══ */}}
   {{if awaitingDiagnosis .Report}}
   {{/* ── PROCESSING STATE: skeleton + progress ── */}}
-  <div class="card bg-base-100 shadow border border-base-300 border-l-4 border-info">
+  <div class="card bg-base-100 shadow border border-base-300 border-l-4 border-l-info">
     <div class="card-body text-center py-8">
       <div class="flex flex-col items-center gap-4">
         <span class="loading loading-spinner loading-lg text-primary"></span>
@@ -94,7 +94,7 @@
   {{/* HERO: Root Cause — the ONE elevated surface (shadow + border + severity
        accent), so it survives the dark theme and reads as primary. Confidence
        ring lives here once; blast/classification in the attached stats strip. */}}
-  <div class="card bg-base-100 shadow border border-base-300 border-l-4 {{if eq .Report.Severity "critical"}}border-error{{else if eq .Report.Severity "warning"}}border-warning{{else}}border-info{{end}}">
+  <div class="card bg-base-100 shadow border border-base-300 border-l-4 {{if eq .Report.Severity "critical"}}border-l-error{{else if eq .Report.Severity "warning"}}border-l-warning{{else}}border-l-info{{end}}">
     <div class="card-body gap-3">
       <div class="flex justify-between items-start gap-4">
         <div class="min-w-0">
