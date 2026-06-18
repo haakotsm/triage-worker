@@ -227,7 +227,7 @@
     <div class="lg:col-span-3 lg:order-1 order-2 flex flex-col gap-4">
       {{/* Causal Chain */}}
       {{if gt (len .Report.CausalChain) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow">
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</summary>
         <div class="collapse-content">
           <ul class="steps steps-vertical">
@@ -239,9 +239,10 @@
       </details>
       {{end}}
 
-      {{/* Evidence */}}
+      {{/* Evidence — open by default so the data behind the diagnosis (which the
+           low-confidence warning asks responders to verify) is visible without a click. */}}
       {{if gt (len .Report.Evidence) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow">
+      <details class="collapse collapse-arrow bg-base-100 shadow" open>
         <summary class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</summary>
         <div class="collapse-content">
           <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Evidence table, scrollable">

@@ -1,13 +1,12 @@
-// init.js — Runs after htmx loads. Handles theme restoration, CSRF token
-// injection, error toast notifications, and Alpine/htmx interop.
+// init.js — Runs after htmx loads. Handles CSRF token injection, error/toast
+// notifications, screen-reader announcements, and post-swap focus.
 
 (function () {
   "use strict";
 
-  // --- Theme ---
-  // Restore saved theme immediately to prevent FOUC.
-  var saved = localStorage.getItem("theme") || "luxury";
-  document.documentElement.setAttribute("data-theme", saved);
+  // Theme is applied pre-paint by theme-init.js (loaded synchronously in
+  // <head>) and toggled/persisted by Alpine in the navbar, so init.js no
+  // longer touches it.
 
   // --- CSRF token injection via htmx:configRequest ---
   // Reads the _csrf cookie and attaches it as X-CSRF-Token header on every

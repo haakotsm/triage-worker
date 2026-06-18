@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{block "page-title" .}}Triage Dashboard{{end}}</title>
+  {{/* Synchronous (no defer) so the saved theme is applied before first paint. */}}
+  <script src="/static/theme-init.js"></script>
   <link rel="stylesheet" href="/static/output.css">
   <style>[x-cloak] { display: none !important; }</style>
   <script src="/static/htmx.min.js" defer></script>
