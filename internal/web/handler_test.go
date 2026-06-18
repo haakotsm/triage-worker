@@ -378,6 +378,86 @@ func TestHandleRetriage_SuccessHTMX(t *testing.T) {
 	}
 }
 
+func TestDashboardContent_PollingOnlyWhenSSEDisabled(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	render := func(sse bool) string {
+		w := httptest.NewRecorder()
+		h.render(w, httptest.NewRequest("GET", "/", nil), "dashboard-content", DashboardData{SSEEnabled: sse})
+		return w.Body.String()
+	}
+
+	// SSE live: refresh via SSE events, no wall-clock polling.
+	withSSE := render(true)
+	if !strings.Contains(withSSE, "sse:report-update") {
+		t.Error("SSE-enabled dashboard should refresh on SSE events")
+	}
+	if strings.Contains(withSSE, "every 30s") || strings.Contains(withSSE, "every 10s") {
+		t.Error("SSE-enabled dashboard must not also poll on a timer")
+	}
+
+	// SSE disabled: polling is the fallback.
+	noSSE := render(false)
+	if !strings.Contains(noSSE, "every 30s") || !strings.Contains(noSSE, "every 10s") {
+		t.Error("SSE-disabled dashboard should fall back to timed polling")
+	}
+	if strings.Contains(noSSE, "sse:") {
+		t.Error("SSE-disabled dashboard should not reference sse: triggers")
+	}
+}
+
+func TestDetailContent_RefreshTriggerFollowsSSE(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	// A processing incident with no root cause is "awaiting diagnosis", so the
+	// inner body carries a refresh trigger.
+	awaiting := Report{ID: 1, State: "processing"}
+
+	render := func(sse bool) string {
+		w := httptest.NewRecorder()
+		h.render(w, httptest.NewRequest("GET", "/incidents/1", nil), "detail-content",
+			DetailData{Report: awaiting, SSEEnabled: sse})
+		return w.Body.String()
+	}
+
+	withSSE := render(true)
+	if !strings.Contains(withSSE, `hx-trigger="sse:incident-update"`) {
+		t.Error("SSE-enabled detail should refresh on incident-update, not poll")
+	}
+	if strings.Contains(withSSE, "every 5s") {
+		t.Error("SSE-enabled detail must not self-poll every 5s")
+	}
+	// The refresh must select AND target the inner body (so the sse-connect
+	// wrapper isn't torn down). Targeting #detail-container instead would
+	// silently reintroduce the EventSource-teardown bug this fixes.
+	if !strings.Contains(withSSE, `hx-select="#detail-body"`) {
+		t.Error("detail refresh should hx-select the inner body to preserve the SSE connection")
+	}
+	if !strings.Contains(withSSE, `hx-target="#detail-body"`) {
+		t.Error("detail refresh must target #detail-body, not the sse-connect #detail-container")
+	}
+
+	noSSE := render(false)
+	if !strings.Contains(noSSE, "every 5s") {
+		t.Error("SSE-disabled detail should fall back to a 5s poll")
+	}
+
+	// Once a diagnosis lands the incident is no longer awaiting, so the inner
+	// body must carry no refresh trigger at all (the other half of the feature).
+	w := httptest.NewRecorder()
+	done := Report{ID: 1, State: "reported", RootCause: "OOMKilled: memory limit too low"}
+	h.render(w, httptest.NewRequest("GET", "/incidents/1", nil), "detail-content",
+		DetailData{Report: done, SSEEnabled: true})
+	if body := w.Body.String(); strings.Contains(body, "hx-trigger") {
+		t.Errorf("a non-awaiting detail must not refresh; got a trigger in: %s", body)
+	}
+}
+
 func TestBuildTimeline(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {

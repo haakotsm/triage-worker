@@ -1,9 +1,21 @@
 {{define "detail-content"}}
-<div id="detail-container"
-     {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}
-     {{if awaitingDiagnosis .Report}}
-     hx-get="/incidents/{{.Report.ID}}" hx-trigger="every 5s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace" hx-indicator="#page-loader"
-     {{end}}>
-  {{template "report-detail" .}}
+<div id="detail-container"{{if .SSEEnabled}} hx-ext="sse" sse-connect="/events"{{end}}>
+  {{/* While a diagnosis is pending we refresh only this inner body, never the
+       sse-connect wrapper above, so the EventSource is not torn down and
+       recreated on every refresh. When SSE is live we refresh on the
+       incident-update event; otherwise we fall back to a 5s poll. hx-select
+       pulls just this element out of the full /incidents/:id response, and the
+       swap targets #detail-body (not #detail-container) so the post-swap focus
+       handler in init.js — scoped to #main-content/#detail-container — does not
+       steal focus on each refresh. */}}
+  <div id="detail-body"
+       {{if awaitingDiagnosis .Report}}
+       hx-get="/incidents/{{.Report.ID}}"
+       hx-trigger="{{if .SSEEnabled}}sse:incident-update{{else}}every 5s{{end}}"
+       hx-target="#detail-body" hx-swap="outerHTML"
+       hx-select="#detail-body" hx-sync="this:replace" hx-indicator="#page-loader"
+       {{end}}>
+    {{template "report-detail" .}}
+  </div>
 </div>
 {{end}}

@@ -18,7 +18,7 @@
 
   {{/* ═══ ROW 1: KPI Stats ═══ */}}
   <div id="stats-panel"
-       hx-get="/partials/stats" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:incident-update, sse:stats-update, sse:refresh, {{end}}every 30s" hx-swap="innerHTML">
+       hx-get="/partials/stats" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:incident-update, sse:stats-update, sse:refresh{{else}}every 30s{{end}}" hx-swap="innerHTML">
     {{template "stats-panel" .Stats}}
   </div>
 
@@ -28,7 +28,7 @@
     {{/* Main: Active Incidents — 4 of 6 columns */}}
     <div class="lg:col-span-4">
       <div id="incidents-panel"
-           hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:refresh, {{end}}every 10s" hx-swap="innerHTML">
+           hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:refresh{{else}}every 10s{{end}}" hx-swap="innerHTML">
         {{template "incidents-table" .}}
       </div>
     </div>
