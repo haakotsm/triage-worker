@@ -30,4 +30,18 @@ func TestRenderIcon(t *testing.T) {
 			t.Errorf("renderIcon(unknown) = %q, want empty", got)
 		}
 	})
+
+	// Names produced at runtime by stateIcon and buildTimeline (not visible to a
+	// static grep of templates) must all resolve, or the control renders
+	// invisibly. This guards against a future typo in those switch statements.
+	t.Run("runtime icon names all resolve", func(t *testing.T) {
+		for _, name := range []string{
+			"hourglass", "bell", "user", "check", "help-circle", // stateIcon
+			"settings", "arrow-up", "pencil", "check-circle", // buildTimeline
+		} {
+			if renderIcon(name) == "" {
+				t.Errorf("icon %q is referenced by stateIcon/buildTimeline but missing from the registry", name)
+			}
+		}
+	})
 }
