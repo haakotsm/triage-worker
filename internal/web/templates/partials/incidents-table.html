@@ -31,11 +31,11 @@
                 {{if eq .State "processing"}}
                   <span class="loading loading-dots loading-xs text-warning" aria-hidden="true"></span>
                 {{else if eq .State "reported"}}
-                  <span class="text-info" aria-hidden="true">●</span>
+                  <span class="text-info inline-flex" aria-hidden="true">{{icon "bell" "h-3.5 w-3.5"}}</span>
                 {{else if eq .State "acknowledged"}}
-                  <span class="text-primary" aria-hidden="true">👤</span>
+                  <span class="text-primary inline-flex" aria-hidden="true">{{icon "user" "h-3.5 w-3.5"}}</span>
                 {{else}}
-                  <span class="text-success" aria-hidden="true">✓</span>
+                  <span class="text-success inline-flex" aria-hidden="true">{{icon "check" "h-3.5 w-3.5"}}</span>
                 {{end}}
                 <span class="badge badge-xs {{incidentStateClass .State}}">{{.State}}</span>
               </div>

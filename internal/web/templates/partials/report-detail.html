@@ -27,10 +27,10 @@
             {{stateIcon .Report.State}} {{stateLabel .Report.State}}
           </span>
           {{if .Report.AssignedTo}}
-          <span class="badge badge-outline badge-sm gap-1">👤 {{.Report.AssignedTo}}</span>
+          <span class="badge badge-outline badge-sm gap-1">{{icon "user" "h-3 w-3"}} {{.Report.AssignedTo}}</span>
           {{end}}
           {{if .Report.EscalationLevel}}
-          <span class="badge badge-warning badge-sm gap-1">⬆ {{.Report.EscalationLevel}}</span>
+          <span class="badge badge-warning badge-sm gap-1">{{icon "arrow-up" "h-3 w-3"}} {{.Report.EscalationLevel}}</span>
           {{end}}
         </div>
       </div>
@@ -41,16 +41,16 @@
   <nav aria-label="Incident workflow progress" class="card bg-base-100 shadow">
     <div class="card-body py-3">
       <ol class="steps steps-horizontal w-full text-xs">
-        <li class="step step-primary" data-content="⚙" aria-current="step">
+        <li class="step step-primary" aria-current="step">
           <span class="mt-1">Processing</span>
         </li>
-        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="📋" {{if eq .Report.State "reported"}}aria-current="step"{{end}}>
+        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "reported"}}aria-current="step"{{end}}>
           <span class="mt-1">Reported</span>
         </li>
-        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" data-content="👤" {{if eq .Report.State "acknowledged"}}aria-current="step"{{end}}>
+        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "acknowledged"}}aria-current="step"{{end}}>
           <span class="mt-1">Acknowledged</span>
         </li>
-        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" data-content="✓" {{if eq .Report.State "resolved"}}aria-current="step"{{end}}>
+        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" {{if eq .Report.State "resolved"}}aria-current="step"{{end}}>
           <span class="mt-1">Resolved</span>
         </li>
       </ol>
@@ -120,7 +120,7 @@
   {{/* Low-confidence warning */}}
   {{if ltf .Report.Confidence 30.0}}
   <div class="alert alert-warning shadow" role="alert">
-    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+    {{icon "alert-triangle" "h-5 w-5 shrink-0"}}
     <div>
       <span class="font-semibold">Low Confidence ({{printf "%.0f" .Report.Confidence}}%)</span>
       <span class="text-sm"> — Verify evidence manually before acting on this diagnosis.</span>
@@ -189,9 +189,9 @@
                     setTimeout(() => copied = false, 2000);
                   });
                 ">
-          <span x-show="!copied" aria-hidden="true">📋</span>
+          <span x-show="!copied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
           <span x-show="!copied"> Copy All</span>
-          <span x-show="copied" x-cloak aria-hidden="true">✅</span>
+          <span x-show="copied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
           <span x-show="copied" x-cloak> Copied!</span>
         </button>
       </div>
@@ -209,8 +209,8 @@
             <button class="btn btn-xs btn-ghost"
                     aria-label="Copy command: {{.Action}}"
                     @click="navigator.clipboard.writeText($el.closest('[x-data]').querySelector('[data-l1-cmd]').textContent.trim()).then(() => { cmdCopied = true; if(window.__announce) window.__announce('Command copied'); setTimeout(() => cmdCopied = false, 1500); })">
-              <span x-show="!cmdCopied" aria-hidden="true">📋</span>
-              <span x-show="cmdCopied" x-cloak aria-hidden="true">✅</span>
+              <span x-show="!cmdCopied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
+              <span x-show="cmdCopied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
             </button>
           </div>
         </div>

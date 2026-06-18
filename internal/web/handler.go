@@ -952,6 +952,7 @@ func templateFuncs() template.FuncMap {
 			return (total + perPage - 1) / perPage
 		},
 		// SAFETY: all return values are hardcoded HTML, no user input.
+		"icon": renderIcon,
 		"blastDots": func(b string) template.HTML {
 			switch b {
 			case "cluster":
@@ -981,18 +982,18 @@ func templateFuncs() template.FuncMap {
 				return "badge-ghost"
 			}
 		},
-		"stateIcon": func(state string) string {
+		"stateIcon": func(state string) template.HTML {
 			switch state {
 			case "processing":
-				return "⏳"
+				return renderIcon("hourglass")
 			case "reported":
-				return "🔔"
+				return renderIcon("bell")
 			case "acknowledged":
-				return "👤"
+				return renderIcon("user")
 			case "resolved":
-				return "✓"
+				return renderIcon("check")
 			default:
-				return "❓"
+				return renderIcon("help-circle")
 			}
 		},
 		"stateLabel": func(state string) string {
@@ -1571,7 +1572,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 
 	// Incident created
 	entries = append(entries, TimelineEntry{
-		Icon:    "⚙️",
+		Icon:    "settings",
 		Time:    report.CreatedAt,
 		Actor:   "system",
 		Message: "Incident created — " + report.AlertName,
@@ -1581,7 +1582,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 	// Completed (reported)
 	if report.CompletedAt != nil {
 		entries = append(entries, TimelineEntry{
-			Icon:    "🔔",
+			Icon:    "bell",
 			Time:    *report.CompletedAt,
 			Actor:   "system",
 			Message: "Triage completed — report ready for review",
@@ -1596,7 +1597,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 			actor = "unknown"
 		}
 		entries = append(entries, TimelineEntry{
-			Icon:    "👤",
+			Icon:    "user",
 			Time:    *report.AcknowledgedAt,
 			Actor:   actor,
 			Message: "Acknowledged by " + actor,
@@ -1611,7 +1612,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 			t = *report.AcknowledgedAt
 		}
 		entries = append(entries, TimelineEntry{
-			Icon:    "⬆️",
+			Icon:    "arrow-up",
 			Time:    t,
 			Actor:   "system",
 			Message: "Escalated to " + report.EscalationLevel,
@@ -1622,7 +1623,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 	// Notes
 	for _, n := range notes {
 		entries = append(entries, TimelineEntry{
-			Icon:    "📝",
+			Icon:    "pencil",
 			Time:    n.CreatedAt,
 			Actor:   n.Author,
 			Message: n.Body,
@@ -1637,7 +1638,7 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 			actor = "system"
 		}
 		entries = append(entries, TimelineEntry{
-			Icon:    "✅",
+			Icon:    "check-circle",
 			Time:    *report.ResolvedAt,
 			Actor:   actor,
 			Message: "Resolved by " + actor,

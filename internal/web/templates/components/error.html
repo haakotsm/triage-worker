@@ -1,6 +1,6 @@
 {{define "error"}}
 <div class="alert alert-error" role="alert">
-  <span>⚠️ {{.Message}}</span>
+  <span class="inline-flex items-center gap-2">{{icon "alert-triangle"}} {{.Message}}</span>
   <a href="/" class="btn btn-sm">Back to Dashboard</a>
 </div>
 {{end}}

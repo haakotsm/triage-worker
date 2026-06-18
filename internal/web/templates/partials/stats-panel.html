@@ -11,10 +11,10 @@
             {{if gt .ActiveCount 0}}
             <div class="indicator">
               <span class="indicator-item indicator-start badge badge-error badge-xs animate-pulse"></span>
-              <span class="text-3xl">🔥</span>
+              {{icon "flame" "h-8 w-8"}}
             </div>
             {{else}}
-            <span class="text-3xl">✅</span>
+            {{icon "check-circle" "h-8 w-8"}}
             {{end}}
           </div>
           <div class="stat-title">Active</div>

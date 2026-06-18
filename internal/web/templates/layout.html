@@ -26,7 +26,7 @@
   <div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <header class="navbar bg-base-100 shadow-lg" role="banner">
     <div class="flex-1">
-      <a href="/" class="btn btn-ghost text-xl">🔍 Triage Dashboard</a>
+      <a href="/" class="btn btn-ghost text-xl gap-2">{{icon "search" "h-5 w-5"}} Triage Dashboard</a>
     </div>
     <div class="flex-none gap-2" x-data="{ luxury: true }" x-init="
       luxury = localStorage.getItem('theme') !== 'light';
@@ -36,8 +36,8 @@
       })">
       <label class="swap swap-rotate btn btn-ghost btn-circle" aria-label="Toggle theme">
         <input type="checkbox" x-model="luxury" aria-label="Switch between dark and light theme" />
-        <span class="swap-on">🌙</span>
-        <span class="swap-off">☀️</span>
+        <span class="swap-on">{{icon "moon" "h-5 w-5"}}</span>
+        <span class="swap-off">{{icon "sun" "h-5 w-5"}}</span>
       </label>
     </div>
   </header>

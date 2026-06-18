@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -58,26 +59,26 @@ func TestTemplateFunctions(t *testing.T) {
 	// Exercise template funcs by calling them directly
 	tests := []struct {
 		state     string
-		wantIcon  string
 		wantClass string
 		wantLabel string
 	}{
-		{"processing", "⏳", "badge-ghost text-base-content/50", "Processing"},
-		{"reported", "🔔", "badge-error animate-pulse motion-reduce:animate-none", "Reported"},
-		{"acknowledged", "👤", "badge-info", "Acknowledged"},
-		{"resolved", "✓", "badge-success opacity-70", "Resolved"},
-		{"unknown", "❓", "badge-ghost", "unknown"},
+		{"processing", "badge-ghost text-base-content/50", "Processing"},
+		{"reported", "badge-error animate-pulse motion-reduce:animate-none", "Reported"},
+		{"acknowledged", "badge-info", "Acknowledged"},
+		{"resolved", "badge-success opacity-70", "Resolved"},
+		{"unknown", "badge-ghost", "unknown"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.state, func(t *testing.T) {
 			// Access template functions indirectly by calling them
-			iconFn := templateFuncs()["stateIcon"].(func(string) string)
+			iconFn := templateFuncs()["stateIcon"].(func(string) template.HTML)
 			classFn := templateFuncs()["incidentStateClass"].(func(string) string)
 			labelFn := templateFuncs()["stateLabel"].(func(string) string)
 
-			if got := iconFn(tt.state); got != tt.wantIcon {
-				t.Errorf("stateIcon(%q) = %q, want %q", tt.state, got, tt.wantIcon)
+			// stateIcon now returns an inline SVG instead of an OS emoji.
+			if got := string(iconFn(tt.state)); !strings.Contains(got, "<svg") {
+				t.Errorf("stateIcon(%q) = %q, want an inline SVG", tt.state, got)
 			}
 			if got := classFn(tt.state); got != tt.wantClass {
 				t.Errorf("incidentStateClass(%q) = %q, want %q", tt.state, got, tt.wantClass)
