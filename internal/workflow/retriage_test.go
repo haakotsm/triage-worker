@@ -66,4 +66,27 @@ func TestRetriageStarter_AllocateAttemptID(t *testing.T) {
 			t.Errorf("unmet expectations: %v", err)
 		}
 	})
+
+	t.Run("errors when every probed attempt collides", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer db.Close()
+		r := &RetriageStarter{db: db, logger: slog.Default()}
+
+		// Every probe (attempt+1 .. attempt+maxAttemptProbe) collides → error,
+		// no infinite loop.
+		for i := 0; i < maxAttemptProbe; i++ {
+			mock.ExpectExec("INSERT INTO triage.reports").
+				WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+
+		if _, err := r.allocateAttemptID(context.Background(), id, id.WorkflowID()); err == nil {
+			t.Fatal("expected an error when all attempts collide, got nil")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
 }

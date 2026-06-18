@@ -85,8 +85,11 @@ func (r *RetriageStarter) StartRetriage(ctx context.Context, workflowID, namespa
 
 	if _, err := r.client.SignalWithStartWorkflow(ctx, newWfID, AlertSignalName, alert, opts,
 		TriageWorkflow, types.TriageParams{Identity: identity}); err != nil {
-		// Leave the preliminary row — the stuck-processing TTL in the webhook's
-		// open-incident lookup reaps orphaned 'processing' rows.
+		// The preliminary 'processing' row is left behind. The webhook's
+		// open-incident lookup ignores rows stuck in 'processing' past
+		// stuckProcessingTTL when minting, so a later alert for this identity is
+		// not blocked; the orphan row itself persists until a resolve transitions
+		// it. Same tradeoff signalWithStart already accepts.
 		return "", fmt.Errorf("signal-with-start re-triage workflow %q: %w", newWfID, err)
 	}
 

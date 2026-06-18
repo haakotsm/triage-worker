@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -316,6 +317,63 @@ func TestHandleRetriage_NotConfiguredHTMX(t *testing.T) {
 	}
 	if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "not configured") {
 		t.Errorf("HX-Trigger = %q, want the not-configured message", got)
+	}
+}
+
+// stubRetrieveStarter is a test double for the re-triage workflow starter.
+type stubRetrieveStarter struct {
+	newWfID string
+	err     error
+	called  bool
+}
+
+func (s *stubRetrieveStarter) StartRetriage(_ context.Context, _, _, _, _, _ string) (string, error) {
+	s.called = true
+	return s.newWfID, s.err
+}
+
+func TestHandleRetriage_SuccessHTMX(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	h, err := NewHandler(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	stub := &stubRetrieveStarter{newWfID: "triage/ns/Deployment/web/OOMKilled" + "::2"}
+	h.SetRetrieveStarter(stub)
+
+	// Incident lookup → a resolved (non-processing) incident.
+	mock.ExpectQuery("SELECT workflow_id, namespace, workload, kind, alert_name, state").
+		WithArgs(int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{"workflow_id", "namespace", "workload", "kind", "alert_name", "state"}).
+			AddRow("triage/ns/Deployment/web/OOMKilled", "ns", "web", "Deployment", "OOMKilled", "resolved"))
+	// Cap query → 1 active version (< 3), so re-triage proceeds.
+	mock.ExpectQuery("SELECT COUNT").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	req := httptest.NewRequest("POST", "/api/incidents/5/retriage", nil)
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !stub.called {
+		t.Error("StartRetriage was not called")
+	}
+	if got := w.Header().Get("HX-Reswap"); got != "none" {
+		t.Errorf("HX-Reswap = %q, want none (original incident is unchanged)", got)
+	}
+	if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "processing") {
+		t.Errorf("HX-Trigger = %q, want the success toast", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
 }
 
