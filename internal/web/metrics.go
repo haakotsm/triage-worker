@@ -40,7 +40,25 @@ var (
 		Name:      "reports_by_state",
 		Help:      "Number of reports by state.",
 	}, []string{"state"})
+
+	// maskedErrorsTotal counts genuine server errors (5xx-class) that are
+	// returned to htmx clients as HTTP 200 so the error fragment/toast can be
+	// swapped (htmx discards non-2xx bodies). These do NOT appear in
+	// http_requests_total{status=~"5.."}, so alerting must watch this counter
+	// to stay aware of server-side failures behind the dashboard.
+	maskedErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "triage",
+		Subsystem: "web",
+		Name:      "masked_errors_total",
+		Help:      "Server errors returned as HTTP 200 to htmx clients (not visible in http_requests_total).",
+	}, []string{"kind"})
 )
+
+// recordMaskedError increments the masked-error counter. kind identifies the
+// surface (e.g. "panel" for renderError, "action" for action handlers).
+func recordMaskedError(kind string) {
+	maskedErrorsTotal.WithLabelValues(kind).Inc()
+}
 
 // MetricsHandler returns the Prometheus metrics HTTP handler.
 func MetricsHandler() http.Handler {

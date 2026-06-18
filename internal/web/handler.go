@@ -396,7 +396,11 @@ func (h *Handler) renderError(w http.ResponseWriter, r *http.Request, msg string
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if !isHTMX(r) {
+	if isHTMX(r) {
+		// 200 so htmx swaps the fragment, but this masks a real 5xx from
+		// http_requests_total — keep an out-of-band signal for alerting.
+		recordMaskedError("panel")
+	} else {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 	if _, err := buf.WriteTo(w); err != nil {
@@ -422,6 +426,11 @@ func toastTrigger(level, msg string) string {
 // clients still get a JSON error with the real status code.
 func (h *Handler) hxError(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	if isHTMX(r) {
+		if status >= http.StatusInternalServerError {
+			// A genuine server error masked as 200 — preserve an alerting signal
+			// (expected 4xx conflicts/validation are intentionally not counted).
+			recordMaskedError("action")
+		}
 		w.Header().Set("HX-Reswap", "none")
 		if t := toastTrigger("error", msg); t != "" {
 			w.Header().Set("HX-Trigger", t)
@@ -1170,8 +1179,9 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 			h.hxError(w, r, http.StatusNotFound, "incident not found")
 			return
 		}
-		// Fire report-resolved (consumed for live refresh) plus a success toast.
-		w.Header().Set("HX-Trigger", `{"report-resolved":null,"toast":{"level":"success","message":"Incident resolved"}}`)
+		// Live refresh of other clients is driven by PG NOTIFY → SSE above; here
+		// we just confirm to the acting user with a success toast.
+		w.Header().Set("HX-Trigger", toastTrigger("success", "Incident resolved"))
 		h.render(w, r, "action-bar", map[string]any{"Report": report})
 		return
 	}
@@ -1181,6 +1191,11 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRetriage triggers a re-triage workflow for an existing incident.
+//
+// NOTE: this endpoint is not yet wired to any UI control, so it still returns
+// raw JSON / non-2xx errors rather than going through hxError/hxStateConflict
+// like the other action handlers. When the Retriage button is added (UI audit
+// task #4), migrate these error paths to the htmx-aware helpers for parity.
 func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
