@@ -172,23 +172,20 @@
     </div>
   </div>
 
-  {{/* L1 Diagnostic Commands — full width, immediately after diagnosis */}}
+  {{/* Verify the Diagnosis — read-only commands that confirm the agent's
+       findings, seeded by the classification + observed facts and targeted at
+       the affected pods. Full width, immediately after the root cause. */}}
   {{if .L1Commands}}
-  <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="{ copied: false }">
+  <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="commandList">
     <div class="card-body">
-      <div class="flex justify-between items-center">
-        <h2 class="font-semibold">L1 Diagnostic Commands</h2>
-        <button class="btn btn-sm btn-primary"
-                aria-label="Copy all diagnostic commands to clipboard"
-                @click="
-                  const cmds = [...$el.closest('[x-data]').querySelectorAll('[data-l1-cmd]')]
-                    .map(el => el.textContent.trim()).join('\n');
-                  navigator.clipboard.writeText(cmds).then(() => {
-                    copied = true;
-                    if(window.__announce) window.__announce('All commands copied to clipboard');
-                    setTimeout(() => copied = false, 2000);
-                  });
-                ">
+      <div class="flex justify-between items-start gap-2">
+        <div>
+          <h2 class="font-semibold">Verify the Diagnosis</h2>
+          <p class="text-xs text-base-content/70">Read-only commands to confirm the findings above.</p>
+        </div>
+        <button class="btn btn-sm btn-primary gap-2"
+                aria-label="Copy all verification commands to clipboard"
+                @click="copyAll()">
           <span x-show="!copied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
           <span x-show="!copied"> Copy All</span>
           <span x-show="copied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
@@ -197,20 +194,20 @@
       </div>
       <div class="flex flex-col gap-2 mt-2">
         {{range .L1Commands}}
-        <div class="bg-base-200 rounded-lg p-3" x-data="{ cmdCopied: false }">
+        <div class="bg-base-200 rounded-lg p-3" x-data="commandBlock">
           <div class="flex justify-between items-start gap-2">
             <div class="flex-1 min-w-0">
               <p class="text-sm mb-1">{{.Action}}</p>
-              <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-l1-cmd>{{.Command}}</code>
+              <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-cmd>{{.Command}}</code>
               {{if .Expected}}
-              <p class="text-xs text-base-content/70 mt-1">→ Expected: {{.Expected}}</p>
+              <p class="text-xs text-base-content/70 mt-1">Confirms: {{.Expected}}</p>
               {{end}}
             </div>
             <button class="btn btn-xs btn-ghost"
                     aria-label="Copy command: {{.Action}}"
-                    @click="navigator.clipboard.writeText($el.closest('[x-data]').querySelector('[data-l1-cmd]').textContent.trim()).then(() => { cmdCopied = true; if(window.__announce) window.__announce('Command copied'); setTimeout(() => cmdCopied = false, 1500); })">
-              <span x-show="!cmdCopied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
-              <span x-show="cmdCopied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
+                    @click="copy()">
+              <span x-show="!copied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
+              <span x-show="copied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
             </button>
           </div>
         </div>
