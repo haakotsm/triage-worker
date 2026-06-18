@@ -13,5 +13,5 @@
 @source "../internal/web/static/init.js";
 
 @plugin "daisyui" {
-  themes: luxury --default;
+  themes: luxury --default, light;
 }
