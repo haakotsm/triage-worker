@@ -4,7 +4,11 @@ WORKDIR /src
 COPY .css-build/package.json .css-build/package-lock.json ./.css-build/
 RUN cd .css-build && npm ci --no-audit --no-fund
 COPY .css-build/app.css ./.css-build/
+# app.css @source scans templates, the Go handlers, and init.js (class names are
+# generated in Go/JS, not just templates), so all three must be present here.
 COPY internal/web/templates/ ./internal/web/templates/
+COPY internal/web/*.go ./internal/web/
+COPY internal/web/static/init.js ./internal/web/static/init.js
 RUN cd .css-build && npx @tailwindcss/cli -i app.css -o /output.css --minify
 
 # ---
