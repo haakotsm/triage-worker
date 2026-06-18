@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"math"
@@ -221,7 +222,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+			"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "+
+			"object-src 'none'; base-uri 'self'")
 
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/static/"):
@@ -468,6 +470,24 @@ func (h *Handler) hxStateConflict(w http.ResponseWriter, r *http.Request, id int
 	if t := toastTrigger("warning", msg); t != "" {
 		w.Header().Set("HX-Trigger", t)
 	}
+	h.render(w, r, "action-bar", map[string]any{"Report": report})
+}
+
+// respondActionBar re-renders the action-bar for the incident after a
+// successful action (acknowledge/escalate), with a success toast. Shared by the
+// htmx success branches of those handlers.
+func (h *Handler) respondActionBar(w http.ResponseWriter, r *http.Request, id int64, toastMsg string) {
+	report, err := h.fetchReport(r.Context(), strconv.FormatInt(id, 10))
+	if err != nil {
+		h.logger.Error("fetch report for htmx response", "error", err, "id", id)
+		h.hxError(w, r, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if report == nil {
+		h.hxError(w, r, http.StatusNotFound, "incident not found")
+		return
+	}
+	w.Header().Set("HX-Trigger", toastTrigger("success", toastMsg))
 	h.render(w, r, "action-bar", map[string]any{"Report": report})
 }
 
@@ -1308,11 +1328,16 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Determine assignee: prefer authenticated user, fall back to request body.
+	// An empty body is fine (the htmx button sends none); a present-but-malformed
+	// body is a client error rather than a confusing "assignee required".
 	var body struct {
 		Assignee string `json:"assignee"`
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			h.hxError(w, r, http.StatusBadRequest, "invalid request body")
+			return
+		}
 	}
 	assignee := body.Assignee
 	if user := UserFromContext(r.Context()); user != nil && user.Email != "" {
@@ -1345,14 +1370,7 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 
 	// If htmx request, return updated action-bar partial.
 	if isHTMX(r) {
-		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
-		if fetchErr != nil {
-			h.logger.Error("fetch report for htmx response", "error", fetchErr)
-			h.hxError(w, r, http.StatusInternalServerError, "internal error")
-			return
-		}
-		w.Header().Set("HX-Trigger", toastTrigger("success", "Incident acknowledged"))
-		h.render(w, r, "action-bar", map[string]any{"Report": report})
+		h.respondActionBar(w, r, id, "Incident acknowledged")
 		return
 	}
 
@@ -1433,14 +1451,7 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 
 	// If htmx request, return updated action-bar partial.
 	if isHTMX(r) {
-		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
-		if fetchErr != nil {
-			h.logger.Error("fetch report for htmx response", "error", fetchErr)
-			h.hxError(w, r, http.StatusInternalServerError, "internal error")
-			return
-		}
-		w.Header().Set("HX-Trigger", toastTrigger("success", "Incident escalated to "+body.Level))
-		h.render(w, r, "action-bar", map[string]any{"Report": report})
+		h.respondActionBar(w, r, id, "Incident escalated to "+body.Level)
 		return
 	}
 
