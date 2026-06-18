@@ -50,7 +50,14 @@ func TestNormalizePath(t *testing.T) {
 		{"/partials/incidents", "/partials/incidents"},
 		{"/reports/123", "/reports/:id"},
 		{"/reports/abc-def", "/reports/:id"},
+		{"/reports/123/resolve", "/reports/:id/resolve"},
 		{"/static/css/app.css", "/static/*"},
+		{"/incidents/42", "/incidents/:id"},
+		{"/incidents/42/resolve", "/incidents/:id/resolve"},
+		{"/api/incidents/42/acknowledge", "/api/incidents/:id/acknowledge"},
+		{"/api/incidents/42/escalate", "/api/incidents/:id/escalate"},
+		{"/api/incidents/42/notes", "/api/incidents/:id/notes"},
+		{"/api/incidents/42/retriage", "/api/incidents/:id/retriage"},
 		{"/unknown/path", "/other"},
 	}
 	for _, tt := range tests {
@@ -94,6 +101,22 @@ func TestResponseWriter_Unwrap(t *testing.T) {
 	}
 }
 
+func TestResponseWriter_ImplementsFlusher(t *testing.T) {
+	rec := httptest.NewRecorder() // *httptest.ResponseRecorder implements http.Flusher
+	rw := &responseWriter{ResponseWriter: rec, statusCode: http.StatusOK}
+
+	// The SSE handler does `w.(http.Flusher)`; the wrapped writer must satisfy
+	// it or streaming breaks when InstrumentHandler is in the chain.
+	f, ok := http.ResponseWriter(rw).(http.Flusher)
+	if !ok {
+		t.Fatal("responseWriter must implement http.Flusher")
+	}
+	f.Flush()
+	if !rec.Flushed {
+		t.Error("Flush should delegate to the underlying writer")
+	}
+}
+
 func TestSetSSEClientCount(t *testing.T) {
 	// Should not panic.
 	SetSSEClientCount(5)
@@ -101,9 +124,33 @@ func TestSetSSEClientCount(t *testing.T) {
 }
 
 func TestSetReportStateCount(t *testing.T) {
-	// Should not panic.
-	SetReportStateCount("open", 10)
+	// Should not panic. Uses the real lifecycle labels emitted by fetchStats.
+	SetReportStateCount("processing", 10)
 	SetReportStateCount("resolved", 5)
+}
+
+func TestInstrumentHandler_PreservesFlusher(t *testing.T) {
+	// End-to-end: an inner handler (like the SSE endpoint) must still see an
+	// http.Flusher after InstrumentHandler wraps the writer, or streaming breaks.
+	var sawFlusher bool
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		f, ok := w.(http.Flusher)
+		sawFlusher = ok
+		if ok {
+			_, _ = w.Write([]byte("data"))
+			f.Flush()
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	InstrumentHandler(inner).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/events", nil))
+
+	if !sawFlusher {
+		t.Fatal("inner handler must still see an http.Flusher through InstrumentHandler (SSE depends on it)")
+	}
+	if !rec.Flushed {
+		t.Error("Flush should reach the underlying writer")
+	}
 }
 
 func TestMetricsHandler_ServesMetrics(t *testing.T) {

@@ -171,14 +171,22 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		devMode := os.Getenv("DEV_MODE") == "true"
 		authMW := web.NewAuthMiddleware(logger, devMode)
 		csrfMW := web.NewCSRFMiddleware(logger)
-		webHandler = authMW.Wrap(csrfMW.Wrap(wh))
+		// InstrumentHandler is outermost so it records every web request
+		// (method/route/status + latency) regardless of auth/CSRF outcome.
+		webHandler = web.InstrumentHandler(authMW.Wrap(csrfMW.Wrap(wh)))
 		logger.Info("web dashboard enabled", "dev_mode", devMode)
 	}
 	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, webHandler, db)
 
+	// /metrics is served unauthenticated (Prometheus scrape) and outside the
+	// instrumented web handler so scrapes don't inflate request metrics.
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", web.MetricsHandler())
+	mux.Handle("/", handler)
+
 	srv := &http.Server{
 		Addr:         listenAddr,
-		Handler:      handler,
+		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,

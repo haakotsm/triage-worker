@@ -633,6 +633,14 @@ func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
 		return s, fmt.Errorf("stats counts: %w", err)
 	}
 
+	// Publish the per-state gauge (scraped via /metrics). fetchStats is the one
+	// place that already has every lifecycle count, and it runs on each stats
+	// refresh, so the gauge tracks reality without an extra query.
+	SetReportStateCount("processing", s.ProcessingCount)
+	SetReportStateCount("reported", s.ReportedCount)
+	SetReportStateCount("acknowledged", s.AcknowledgedCount)
+	SetReportStateCount("resolved", s.ResolvedCount)
+
 	s.MTTRDisplay = formatDuration(s.MTTRSeconds)
 	if s.TotalCount > 0 {
 		s.ResolutionRate = float64(s.ResolvedCount) / float64(s.TotalCount) * 100
