@@ -67,11 +67,39 @@
     }, 5000);
   }
 
+  // Map a toast level to its daisyUI alert class.
+  var TOAST_CLASS = {
+    error: "alert-error",
+    warning: "alert-warning",
+    success: "alert-success",
+    info: "alert-info",
+  };
+
+  // --- Server-driven toasts ---
+  // Handlers emit an HX-Trigger header of the form
+  //   {"toast":{"level":"error|warning|success|info","message":"..."}}
+  // which htmx dispatches as a `toast` event. This is how action failures
+  // (e.g. "already acknowledged") and successes surface, since htmx does not
+  // swap the bodies of non-2xx responses.
+  document.body.addEventListener("toast", function (evt) {
+    var d = evt.detail || {};
+    if (!d.message) return;
+    showToast(d.message, TOAST_CLASS[d.level] || "alert-error");
+  });
+
   document.addEventListener("htmx:responseError", function (evt) {
-    showToast(
-      "Request failed (status " + evt.detail.xhr.status + ")",
-      "alert-error"
-    );
+    var xhr = evt.detail.xhr;
+    // Prefer the server's human-readable message over a bare status code.
+    var msg = "Request failed (status " + xhr.status + ")";
+    try {
+      var parsed = JSON.parse(xhr.responseText);
+      if (parsed && parsed.error) {
+        msg = parsed.error;
+      }
+    } catch (e) {
+      /* non-JSON body — keep the status-code fallback */
+    }
+    showToast(msg, "alert-error");
   });
 
   document.addEventListener("htmx:sendError", function () {

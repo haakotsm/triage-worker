@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,6 +122,80 @@ func TestUnknownPath_Returns404(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Errorf("GET /nonexistent = %d, want 404", w.Code)
 	}
+}
+
+func TestToastTrigger(t *testing.T) {
+	got := toastTrigger("error", "already acknowledged")
+	want := `{"toast":{"level":"error","message":"already acknowledged"}}`
+	if got != want {
+		t.Errorf("toastTrigger() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderError_HTMXReturns200(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	// htmx requests must get 200 so the fragment is swapped (htmx discards
+	// non-2xx bodies); full-page loads keep the 500.
+	t.Run("htmx", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/partials/stats", nil)
+		req.Header.Set("HX-Request", "true")
+		w := httptest.NewRecorder()
+		h.renderError(w, req, "Failed to load stats")
+		if w.Code != http.StatusOK {
+			t.Errorf("renderError(htmx) status = %d, want 200", w.Code)
+		}
+		if body := w.Body.String(); !strings.Contains(body, "Failed to load stats") {
+			t.Errorf("renderError(htmx) body missing message: %q", body)
+		}
+	})
+
+	t.Run("full-page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		h.renderError(w, req, "Failed to load stats")
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("renderError(full-page) status = %d, want 500", w.Code)
+		}
+	})
+}
+
+func TestHXError(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	t.Run("htmx toast with no swap", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/incidents/1/acknowledge", nil)
+		req.Header.Set("HX-Request", "true")
+		w := httptest.NewRecorder()
+		h.hxError(w, req, http.StatusConflict, "already acknowledged")
+		if w.Code != http.StatusOK {
+			t.Errorf("hxError(htmx) status = %d, want 200 (so htmx processes headers)", w.Code)
+		}
+		if got := w.Header().Get("HX-Reswap"); got != "none" {
+			t.Errorf("hxError(htmx) HX-Reswap = %q, want none", got)
+		}
+		if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "already acknowledged") {
+			t.Errorf("hxError(htmx) HX-Trigger = %q, want it to carry the message", got)
+		}
+	})
+
+	t.Run("non-htmx keeps status and json", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/incidents/1/acknowledge", nil)
+		w := httptest.NewRecorder()
+		h.hxError(w, req, http.StatusConflict, "already acknowledged")
+		if w.Code != http.StatusConflict {
+			t.Errorf("hxError(non-htmx) status = %d, want 409", w.Code)
+		}
+		if body := w.Body.String(); !strings.Contains(body, `"error"`) {
+			t.Errorf("hxError(non-htmx) body = %q, want json error", body)
+		}
+	})
 }
 
 func TestBuildTimeline(t *testing.T) {
