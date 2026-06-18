@@ -124,9 +124,33 @@ func TestSetSSEClientCount(t *testing.T) {
 }
 
 func TestSetReportStateCount(t *testing.T) {
-	// Should not panic.
-	SetReportStateCount("open", 10)
+	// Should not panic. Uses the real lifecycle labels emitted by fetchStats.
+	SetReportStateCount("processing", 10)
 	SetReportStateCount("resolved", 5)
+}
+
+func TestInstrumentHandler_PreservesFlusher(t *testing.T) {
+	// End-to-end: an inner handler (like the SSE endpoint) must still see an
+	// http.Flusher after InstrumentHandler wraps the writer, or streaming breaks.
+	var sawFlusher bool
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		f, ok := w.(http.Flusher)
+		sawFlusher = ok
+		if ok {
+			_, _ = w.Write([]byte("data"))
+			f.Flush()
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	InstrumentHandler(inner).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/events", nil))
+
+	if !sawFlusher {
+		t.Fatal("inner handler must still see an http.Flusher through InstrumentHandler (SSE depends on it)")
+	}
+	if !rec.Flushed {
+		t.Error("Flush should reach the underlying writer")
+	}
 }
 
 func TestMetricsHandler_ServesMetrics(t *testing.T) {
