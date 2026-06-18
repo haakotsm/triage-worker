@@ -1,6 +1,16 @@
 @import "tailwindcss";
 
+/*
+ * Scan every surface that can emit a daisyUI/Tailwind class name. Beyond the
+ * templates, class names are generated in Go string literals (handler.go:
+ * severityClass / riskClass / incidentStateClass / timelineTypeClass → e.g.
+ * badge-info) and in JS (init.js builds alert-error/warning/success/info for
+ * toasts). Without these, Tailwind purges those classes and they render
+ * unstyled. The matching files are copied into the css-builder Docker stage.
+ */
 @source "../internal/web/templates/**/*.html";
+@source "../internal/web/*.go";
+@source "../internal/web/static/init.js";
 
 @plugin "daisyui" {
   themes: luxury --default;

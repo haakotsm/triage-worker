@@ -57,9 +57,39 @@ jobs:
         with:
           version: v2.12.0
 
+  css:
+    # The committed internal/web/static/output.css is embedded via go:embed and
+    # used by local `go run`. The Docker image regenerates it, but local dev (and
+    # this CI's `go test`) use the committed copy — which silently drifts when
+    # templates / Go class-generators / init.js change. Regenerate with the same
+    # pinned deps and fail if the committed file is stale.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pinned CSS toolchain
+        run: cd .css-build && npm ci --no-audit --no-fund
+
+      - name: Regenerate output.css
+        run: cd .css-build && npx @tailwindcss/cli -i app.css -o ../internal/web/static/output.css --minify
+
+      - name: Fail if committed output.css is stale
+        run: |
+          if ! git diff --quiet -- internal/web/static/output.css; then
+            echo "::error::internal/web/static/output.css is out of date. Regenerate it:"
+            echo "  cd .css-build && npm ci && npx @tailwindcss/cli -i app.css -o ../internal/web/static/output.css --minify"
+            git diff --stat -- internal/web/static/output.css
+            exit 1
+          fi
+          echo "output.css is up to date."
+
   docker:
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test, lint, css]
     permissions:
       contents: read
       packages: write
