@@ -42,6 +42,17 @@
           ⬆ Escalate
         </button>
         {{end}}
+        {{if ne .Report.State "processing"}}
+        <button class="btn btn-sm btn-ghost"
+                hx-post="/api/incidents/{{.Report.ID}}/retriage"
+                hx-target="#action-bar"
+                hx-swap="outerHTML"
+                hx-confirm="Re-run triage analysis for this incident? This starts a new triage attempt."
+                hx-indicator=".action-spinner"
+                aria-label="Re-triage this incident">
+          🔄 Re-triage
+        </button>
+        {{end}}
         <span class="loading loading-spinner loading-xs action-spinner htmx-indicator"></span>
       {{/* Resolve form (inline, toggled by Alpine) */}}
       {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
