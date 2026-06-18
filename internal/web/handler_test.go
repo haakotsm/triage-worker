@@ -502,6 +502,28 @@ func TestHandleAcknowledge_MalformedBodyHTMX(t *testing.T) {
 	}
 }
 
+func TestActionResponse_EmitsOOBStatus(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	// The action handlers return "action-response": the re-rendered #action-bar
+	// PLUS hx-swap-oob copies of the canonical status badge + stepper, so the
+	// header stays in sync after an action (fixes the stale-badge bug).
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/incidents/1/acknowledge", nil)
+	req.Header.Set("HX-Request", "true")
+	rpt := &Report{ID: 1, State: "acknowledged", Severity: "warning", AssignedTo: "alice@example.com"}
+	h.render(w, req, "action-response", map[string]any{"Report": rpt})
+
+	body := w.Body.String()
+	for _, want := range []string{`id="action-bar"`, `id="incident-status"`, `hx-swap-oob="true"`, `id="incident-stepper"`, "Acknowledged"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("action-response missing %q; got:\n%s", want, body)
+		}
+	}
+}
+
 func TestBuildTimeline(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {

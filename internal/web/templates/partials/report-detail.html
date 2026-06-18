@@ -22,27 +22,12 @@
           · Alert: {{.Report.AlertName}}
         </p>
       </div>
-      <div class="flex items-center gap-2 flex-wrap">
-        <span class="badge {{incidentStateClass .Report.State}} gap-1">
-          {{stateIcon .Report.State}} {{stateLabel .Report.State}}
-        </span>
-        {{if .Report.AssignedTo}}
-        <span class="badge badge-outline badge-sm gap-1">{{icon "user" "h-3 w-3"}} {{.Report.AssignedTo}}</span>
-        {{end}}
-        {{if .Report.EscalationLevel}}
-        <span class="badge badge-warning badge-sm gap-1">{{icon "arrow-up" "h-3 w-3"}} {{.Report.EscalationLevel}}</span>
-        {{end}}
-      </div>
+      {{/* Canonical incident status — the single home for state/owner/escalation;
+           kept in sync by the action handlers via hx-swap-oob. */}}
+      <div id="incident-status" class="flex items-center gap-2 flex-wrap">{{template "incident-status-badges" .Report}}</div>
     </div>
-    {{/* Slim workflow stepper */}}
-    <nav aria-label="Incident workflow progress">
-      <ol class="steps steps-horizontal w-full text-xs">
-        <li class="step step-primary" aria-current="step"><span class="mt-1">Processing</span></li>
-        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "reported"}}aria-current="step"{{end}}><span class="mt-1">Reported</span></li>
-        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "acknowledged"}}aria-current="step"{{end}}><span class="mt-1">Acknowledged</span></li>
-        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" {{if eq .Report.State "resolved"}}aria-current="step"{{end}}><span class="mt-1">Resolved</span></li>
-      </ol>
-    </nav>
+    {{/* Slim workflow stepper (OOB-updated on actions) */}}
+    <nav id="incident-stepper" aria-label="Incident workflow progress">{{template "workflow-stepper" .Report}}</nav>
     {{if awaitingDiagnosis .Report}}
     <p class="text-xs text-center text-base-content/70">
       Temporal workflow running: correlating alerts → enriching context → AI triage agent
@@ -194,7 +179,7 @@
        when confidence is low (the warning above tells responders to verify it). */}}
   {{if gt (len .Report.CausalChain) 0}}
   <details class="collapse collapse-arrow border border-base-300 bg-base-100">
-    <summary class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</summary>
+    <summary class="collapse-title"><h2 class="font-semibold inline">Causal Chain ({{len .Report.CausalChain}} steps)</h2></summary>
     <div class="collapse-content">
       <ul class="steps steps-vertical">
         {{range .Report.CausalChain}}
@@ -207,9 +192,9 @@
 
   {{if gt (len .Report.Evidence) 0}}
   <details class="collapse collapse-arrow border border-base-300 bg-base-100" {{if ltf .Report.Confidence 30.0}}open{{end}}>
-    <summary class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</summary>
+    <summary class="collapse-title"><h2 class="font-semibold inline">Evidence ({{len .Report.Evidence}})</h2></summary>
     <div class="collapse-content">
-      <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Evidence table, scrollable">
+      <div class="overflow-x-auto" tabindex="0" aria-label="Evidence table, scrollable">
         <table class="table table-sm">
           <thead>
             <tr>
