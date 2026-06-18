@@ -2,46 +2,4 @@
 {{template "layout" .}}
 {{end}}
 
-{{define "content"}}
-<div class="flex flex-col gap-6"
-     {{if .SSEEnabled}}hx-ext="sse" sse-connect="/events"{{end}}>
-
-  {{/* SSE connection indicator */}}
-  {{if .SSEEnabled}}
-  <div x-data="{ connected: false, init() {
-    this.$el.closest('[sse-connect]').addEventListener('htmx:sseOpen', () => this.connected = true);
-    this.$el.closest('[sse-connect]').addEventListener('htmx:sseClose', () => this.connected = false);
-    this.$el.closest('[sse-connect]').addEventListener('htmx:sseError', () => this.connected = false);
-  }}" class="fixed bottom-4 right-4 z-50" role="status" aria-live="polite" aria-atomic="true">
-    <div class="badge badge-sm gap-1" :class="connected ? 'badge-success' : 'badge-error'">
-      <span class="inline-block w-2 h-2 rounded-full" :class="connected ? 'bg-success animate-pulse' : 'bg-error'" aria-hidden="true"></span>
-      <span x-text="connected ? 'Live' : 'Reconnecting...'" class="text-xs"></span>
-    </div>
-  </div>
-  {{end}}
-
-  {{/* ═══ ROW 1: KPI Stats ═══ */}}
-  <div id="stats-panel"
-       hx-get="/partials/stats" hx-trigger="{{if .SSEEnabled}}sse:report-update, sse:incident-update, sse:stats-update, sse:refresh, {{end}}every 30s" hx-swap="innerHTML">
-    {{template "stats-panel" .Stats}}
-  </div>
-
-  {{/* ═══ ROW 2: Incidents + Sidebar ═══ */}}
-  <div class="grid grid-cols-1 lg:grid-cols-6 gap-4">
-
-    {{/* Main: Active Incidents — 4 of 6 columns */}}
-    <div class="lg:col-span-4">
-      <div id="incidents-panel"
-           hx-get="/partials/incidents" hx-trigger="{{if .SSEEnabled}}sse:incident-update, sse:refresh, {{end}}every 10s" hx-swap="innerHTML">
-        {{template "incidents-table" .}}
-      </div>
-    </div>
-
-    {{/* Sidebar: Trend + Severity — 2 of 6 columns */}}
-    <div class="lg:col-span-2 flex flex-col gap-4">
-      {{template "chart-sidebar" .}}
-    </div>
-
-  </div>
-</div>
-{{end}}
+{{define "content"}}{{template "dashboard-content" .}}{{end}}

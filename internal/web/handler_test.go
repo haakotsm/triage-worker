@@ -276,6 +276,29 @@ func TestHandleAcknowledge_ConflictHTMX(t *testing.T) {
 	}
 }
 
+func TestDashboardContent_IsRealDashboardNotReportTable(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	// The HX branch of handleDashboard (e.g. the detail breadcrumb's hx-get="/")
+	// must render the real dashboard content — stats, incidents and SSE wiring —
+	// not the orphaned report-table fragment. Render the partial directly so the
+	// assertion needs no DB.
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	h.render(w, req, "dashboard-content", DashboardData{SSEEnabled: true})
+
+	body := w.Body.String()
+	for _, want := range []string{`id="stats-panel"`, `id="incidents-panel"`, `sse-connect="/events"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard-content missing %q — HX dashboard nav would render a degraded page", want)
+		}
+	}
+}
+
 func TestBuildTimeline(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {

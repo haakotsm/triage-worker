@@ -272,7 +272,10 @@ func (h *Handler) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isHTMX(r) {
-		h.render(w, r, "report-table", data)
+		// HX navigation back to the dashboard (e.g. the detail breadcrumb's
+		// hx-get="/") must restore the real dashboard — stats, incidents,
+		// charts and the SSE wiring — not the orphaned report-table fragment.
+		h.render(w, r, "dashboard-content", data)
 	} else {
 		h.render(w, r, "dashboard", data)
 	}
