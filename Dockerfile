@@ -1,4 +1,7 @@
-FROM node:22-alpine AS css-builder
+# glibc (not -alpine) so Tailwind's native oxide engine matches the CI drift
+# check (ubuntu/glibc) and local builds — guarantees byte-identical output.css
+# across all three. This stage is discarded; only /output.css is copied out.
+FROM node:22 AS css-builder
 
 WORKDIR /src
 COPY .css-build/package.json .css-build/package-lock.json ./.css-build/
