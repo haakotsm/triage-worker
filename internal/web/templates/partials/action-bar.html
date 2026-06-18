@@ -7,7 +7,7 @@
           {{stateIcon .Report.State}} {{stateLabel .Report.State}}
         </span>
         {{if .Report.AssignedTo}}
-        <span class="text-sm text-base-content/60">· owned by <span class="font-mono">{{.Report.AssignedTo}}</span></span>
+        <span class="text-sm text-base-content/70">· owned by <span class="font-mono">{{.Report.AssignedTo}}</span></span>
         {{end}}
       </div>
       <div class="flex items-center gap-2 relative" x-data="{ showResolve: false }">
@@ -25,6 +25,8 @@
         <button class="btn btn-sm btn-success"
                 @click="showResolve = !showResolve"
                 :aria-expanded="showResolve"
+                aria-haspopup="dialog"
+                aria-controls="resolve-popover"
                 aria-label="Resolve this incident">
           ✓ Resolve
         </button>
@@ -57,8 +59,10 @@
       {{/* Resolve form (inline, toggled by Alpine) */}}
       {{if and (ne .Report.State "resolved") (ne .Report.State "processing")}}
       <div x-show="showResolve" x-cloak x-transition
+           x-trap.noscroll="showResolve"
            @click.outside="showResolve = false"
            @keydown.escape.window="showResolve = false"
+           id="resolve-popover" role="dialog" aria-modal="true" aria-label="Resolve incident"
            class="absolute right-0 top-full mt-2 z-10 card bg-base-200 shadow-lg border border-base-300 w-80 max-w-[calc(100vw-2rem)]">
         <div class="card-body p-4">
           <h4 class="font-semibold text-sm mb-2">Resolve Incident</h4>
@@ -68,14 +72,14 @@
                 hx-headers='{"Content-Type": "application/json"}'
                 hx-ext="json-enc"
                 hx-disabled-elt="find button[type=submit]">
-            <div class="form-control mb-2">
-              <input type="text" name="resolution_note" placeholder="Resolution note (optional)"
-                     class="input input-bordered input-sm w-full"
-                     aria-label="Resolution note" />
+            <div class="flex flex-col gap-1 mb-2">
+              <label for="resolution-note" class="text-xs font-medium">Resolution note <span class="text-base-content/70">(optional)</span></label>
+              <input id="resolution-note" type="text" name="resolution_note" placeholder="What fixed it?"
+                     class="input input-sm w-full" />
             </div>
-            <div class="form-control mb-3">
-              <select name="resolution_source" class="select select-bordered select-sm w-full"
-                      aria-label="Resolution source">
+            <div class="flex flex-col gap-1 mb-3">
+              <label for="resolution-source" class="text-xs font-medium">Resolution source</label>
+              <select id="resolution-source" name="resolution_source" class="select select-sm w-full">
                 <option value="manual">Manual fix</option>
                 <option value="automated">Auto-resolved</option>
                 <option value="escalated">Resolved by escalation</option>

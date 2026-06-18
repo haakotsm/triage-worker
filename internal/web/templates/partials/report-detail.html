@@ -17,7 +17,7 @@
             {{.Report.Kind}}/{{.Report.Workload}}
             <span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>
           </h1>
-          <p class="text-sm text-base-content/60 mt-1">
+          <p class="text-sm text-base-content/70 mt-1">
             Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
             · Alert: {{.Report.AlertName}}
           </p>
@@ -55,7 +55,7 @@
         </li>
       </ol>
       {{if awaitingDiagnosis .Report}}
-      <p class="text-xs text-center text-base-content/50 mt-2">
+      <p class="text-xs text-center text-base-content/70 mt-2">
         Temporal workflow running: correlating alerts → enriching context → AI triage agent
       </p>
       {{end}}
@@ -71,11 +71,11 @@
         <span class="loading loading-spinner loading-lg text-primary"></span>
         <div>
           <h2 class="font-semibold text-lg">Diagnosis in Progress</h2>
-          <p class="text-sm text-base-content/60 mt-1">
+          <p class="text-sm text-base-content/70 mt-1">
             The AI triage agent is analyzing this incident. Results will appear automatically.
           </p>
         </div>
-        <div class="flex gap-2 text-xs text-base-content/50">
+        <div class="flex gap-2 text-xs text-base-content/70">
           <span>Alert: <span class="font-mono">{{.Report.AlertName}}</span></span>
           <span>· Started {{timeAgo .Report.CreatedAt}}</span>
         </div>
@@ -132,21 +132,21 @@
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
     <div class="card bg-base-100 shadow-sm">
       <div class="card-body py-3 px-4">
-        <div class="text-xs uppercase text-base-content/50 font-semibold">Blast Radius</div>
+        <div class="text-xs uppercase text-base-content/70 font-semibold">Blast Radius</div>
         <div class="text-lg font-bold mt-1">{{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}}</div>
       </div>
     </div>
     {{if .Report.Classification}}
     <div class="card bg-base-100 shadow-sm">
       <div class="card-body py-3 px-4">
-        <div class="text-xs uppercase text-base-content/50 font-semibold">Classification</div>
+        <div class="text-xs uppercase text-base-content/70 font-semibold">Classification</div>
         <div class="text-lg font-bold mt-1">{{.Report.Classification}}</div>
       </div>
     </div>
     {{end}}
     <div class="card bg-base-100 shadow-sm">
       <div class="card-body py-3 px-4">
-        <div class="text-xs uppercase text-base-content/50 font-semibold">Confidence</div>
+        <div class="text-xs uppercase text-base-content/70 font-semibold">Confidence</div>
         <div class="flex items-center gap-2 mt-1">
           <div class="radial-progress text-primary text-xs"
                style="--value:{{printf "%.0f" .Report.Confidence}};--size:2.5rem;--thickness:3px;"
@@ -203,7 +203,7 @@
               <p class="text-sm mb-1">{{.Action}}</p>
               <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-l1-cmd>{{.Command}}</code>
               {{if .Expected}}
-              <p class="text-xs text-base-content/60 mt-1">→ Expected: {{.Expected}}</p>
+              <p class="text-xs text-base-content/70 mt-1">→ Expected: {{.Expected}}</p>
               {{end}}
             </div>
             <button class="btn btn-xs btn-ghost"

@@ -34,6 +34,7 @@ func TestStaticAssets(t *testing.T) {
 	}{
 		{"/static/htmx.min.js"},
 		{"/static/alpine.min.js"},
+		{"/static/alpine-focus.min.js"},
 		{"/static/output.css"},
 	}
 

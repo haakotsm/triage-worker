@@ -65,7 +65,7 @@
           <td>{{.Namespace}}</td>
           <td class="max-w-sm">
             <div class="text-sm font-medium">{{.AlertName}}</div>
-            {{if .Summary}}<div class="text-xs text-base-content/60 line-clamp-2">{{.Summary}}</div>{{end}}
+            {{if .Summary}}<div class="text-xs text-base-content/70 line-clamp-2">{{.Summary}}</div>{{end}}
           </td>
           <td class="whitespace-nowrap">{{blastDots .BlastRadius}} <span class="text-xs">{{.BlastRadius}}</span></td>
           <td class="text-sm whitespace-nowrap">{{timeAgo .CompletedAt}}</td>
@@ -83,7 +83,7 @@
         </tr>
         {{else}}
         <tr>
-          <td colspan="8" class="text-center py-12 text-base-content/50">
+          <td colspan="8" class="text-center py-12 text-base-content/70">
             <div class="flex flex-col items-center gap-2">
               <span class="text-4xl">✅</span>
               <span>No triage reports found</span>

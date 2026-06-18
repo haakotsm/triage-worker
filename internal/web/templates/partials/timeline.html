@@ -8,7 +8,7 @@
 
     {{/* Add Note form */}}
     {{if and .Report (ne .Report.State "resolved")}}
-    <form class="flex gap-2 mb-4"
+    <form class="mb-4"
           hx-post="/api/incidents/{{.Report.ID}}/notes"
           hx-target="#incident-timeline"
           hx-swap="outerHTML"
@@ -16,14 +16,16 @@
           hx-ext="json-enc"
           hx-disabled-elt="button[type=submit]"
           hx-indicator=".note-spinner">
-      <input type="text" name="body" placeholder="Add a note…"
-             class="input input-bordered input-sm flex-1" required
-             minlength="1" maxlength="2000"
-             aria-label="Add a note to this incident" />
-      <button type="submit" class="btn btn-sm btn-primary gap-1">
-        📝 Add
-        <span class="loading loading-spinner loading-xs note-spinner htmx-indicator"></span>
-      </button>
+      <label for="note-body" class="text-xs font-medium">Add a note</label>
+      <div class="flex gap-2 mt-1">
+        <input id="note-body" type="text" name="body" placeholder="What did you do or observe?"
+               class="input input-sm flex-1" required
+               minlength="1" maxlength="2000" />
+        <button type="submit" class="btn btn-sm btn-primary gap-1">
+          <span aria-hidden="true">📝</span> Add
+          <span class="loading loading-spinner loading-xs note-spinner htmx-indicator"></span>
+        </button>
+      </div>
     </form>
     {{end}}
 
@@ -38,7 +40,7 @@
         </div>
         <div class="flex flex-col gap-0.5">
           <div class="flex items-baseline gap-2 flex-wrap">
-            <span class="text-xs text-base-content/50 font-mono">{{formatDate .Time}}</span>
+            <span class="text-xs text-base-content/70 font-mono">{{formatDate .Time}}</span>
             <span class="text-xs {{timelineTypeClass .Type}} font-semibold">{{.Actor}}</span>
           </div>
           <p class="text-sm break-words {{if eq .Type "note"}}bg-base-200 rounded-lg px-3 py-2 mt-1{{end}}">{{.Message}}</p>
@@ -47,7 +49,7 @@
       {{end}}
     </ul>
     {{else}}
-    <p class="text-sm text-base-content/50">No timeline events yet.</p>
+    <p class="text-sm text-base-content/70">No timeline events yet.</p>
     {{end}}
   </div>
 </div>

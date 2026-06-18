@@ -7,28 +7,28 @@
       <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wider">Blast Radius</h3>
       <div class="flex flex-col gap-3 mt-2">
         <div class="flex items-center gap-2">
-          <span class="text-xs w-20 text-right text-base-content/60">Cluster</span>
+          <span class="text-xs w-20 text-right text-base-content/70">Cluster</span>
           <progress class="progress progress-error h-3 flex-1"
                     value="{{.Stats.BlastCluster}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
                     aria-label="Cluster blast radius incidents"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Stats.BlastCluster}}</span>
         </div>
         <div class="flex items-center gap-2">
-          <span class="text-xs w-20 text-right text-base-content/60">Namespace</span>
+          <span class="text-xs w-20 text-right text-base-content/70">Namespace</span>
           <progress class="progress progress-warning h-3 flex-1"
                     value="{{.Stats.BlastNamespace}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
                     aria-label="Namespace blast radius incidents"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Stats.BlastNamespace}}</span>
         </div>
         <div class="flex items-center gap-2">
-          <span class="text-xs w-20 text-right text-base-content/60">Deploy</span>
+          <span class="text-xs w-20 text-right text-base-content/70">Deploy</span>
           <progress class="progress progress-info h-3 flex-1"
                     value="{{.Stats.BlastDeployment}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
                     aria-label="Deployment blast radius incidents"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Stats.BlastDeployment}}</span>
         </div>
         <div class="flex items-center gap-2">
-          <span class="text-xs w-20 text-right text-base-content/60">Pod</span>
+          <span class="text-xs w-20 text-right text-base-content/70">Pod</span>
           <progress class="progress progress-success h-3 flex-1"
                     value="{{.Stats.BlastPod}}" max="{{if gt .Stats.ActiveCount 0}}{{.Stats.ActiveCount}}{{else}}1{{end}}"
                     aria-label="Pod blast radius incidents"></progress>
@@ -46,7 +46,7 @@
       <div class="flex flex-col gap-2 mt-2">
         {{range .Stats.Classifications}}
         <div class="flex items-center gap-2">
-          <span class="text-xs w-20 text-right text-base-content/60 truncate">{{.Name}}</span>
+          <span class="text-xs w-20 text-right text-base-content/70 truncate">{{.Name}}</span>
           <progress class="progress progress-primary h-2 flex-1"
                     value="{{.Count}}" max="{{$.Stats.ActiveCount}}"></progress>
           <span class="text-xs font-mono w-6 text-right">{{.Count}}</span>
