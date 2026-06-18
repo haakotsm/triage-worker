@@ -8,64 +8,52 @@
     </ol>
   </nav>
 
-  {{/* Header */}}
-  <div class="card bg-base-100 shadow">
-    <div class="card-body">
-      <div class="flex justify-between items-start flex-wrap gap-2">
-        <div>
-          <h1 class="card-title text-lg font-mono">
-            {{.Report.Kind}}/{{.Report.Workload}}
-            <span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>
-          </h1>
-          <p class="text-sm text-base-content/70 mt-1">
-            Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
-            · Alert: {{.Report.AlertName}}
-          </p>
-        </div>
-        <div class="flex items-center gap-3">
-          <span class="badge {{incidentStateClass .Report.State}} gap-1">
-            {{stateIcon .Report.State}} {{stateLabel .Report.State}}
-          </span>
-          {{if .Report.AssignedTo}}
-          <span class="badge badge-outline badge-sm gap-1">{{icon "user" "h-3 w-3"}} {{.Report.AssignedTo}}</span>
-          {{end}}
-          {{if .Report.EscalationLevel}}
-          <span class="badge badge-warning badge-sm gap-1">{{icon "arrow-up" "h-3 w-3"}} {{.Report.EscalationLevel}}</span>
-          {{end}}
-        </div>
+  {{/* Header status strip — flat chrome (no card), state shown here.
+       Slim inline stepper instead of a separate elevated card. */}}
+  <div class="flex flex-col gap-3 pb-4 border-b border-base-300">
+    <div class="flex justify-between items-start flex-wrap gap-2">
+      <div>
+        <h1 class="text-lg font-mono font-semibold flex items-center gap-2 flex-wrap">
+          {{.Report.Kind}}/{{.Report.Workload}}
+          <span class="badge {{severityClass .Report.Severity}}">{{.Report.Severity}}</span>
+        </h1>
+        <p class="text-sm text-base-content/70 mt-1">
+          Namespace: <span class="font-mono">{{.Report.Namespace}}</span>
+          · Alert: {{.Report.AlertName}}
+        </p>
+      </div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="badge {{incidentStateClass .Report.State}} gap-1">
+          {{stateIcon .Report.State}} {{stateLabel .Report.State}}
+        </span>
+        {{if .Report.AssignedTo}}
+        <span class="badge badge-outline badge-sm gap-1">{{icon "user" "h-3 w-3"}} {{.Report.AssignedTo}}</span>
+        {{end}}
+        {{if .Report.EscalationLevel}}
+        <span class="badge badge-warning badge-sm gap-1">{{icon "arrow-up" "h-3 w-3"}} {{.Report.EscalationLevel}}</span>
+        {{end}}
       </div>
     </div>
-  </div>
-
-  {{/* Workflow Progress Stepper */}}
-  <nav aria-label="Incident workflow progress" class="card bg-base-100 shadow">
-    <div class="card-body py-3">
+    {{/* Slim workflow stepper */}}
+    <nav aria-label="Incident workflow progress">
       <ol class="steps steps-horizontal w-full text-xs">
-        <li class="step step-primary" aria-current="step">
-          <span class="mt-1">Processing</span>
-        </li>
-        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "reported"}}aria-current="step"{{end}}>
-          <span class="mt-1">Reported</span>
-        </li>
-        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "acknowledged"}}aria-current="step"{{end}}>
-          <span class="mt-1">Acknowledged</span>
-        </li>
-        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" {{if eq .Report.State "resolved"}}aria-current="step"{{end}}>
-          <span class="mt-1">Resolved</span>
-        </li>
+        <li class="step step-primary" aria-current="step"><span class="mt-1">Processing</span></li>
+        <li class="step {{if or (eq .Report.State "reported") (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "reported"}}aria-current="step"{{end}}><span class="mt-1">Reported</span></li>
+        <li class="step {{if or (eq .Report.State "acknowledged") (eq .Report.State "resolved")}}step-primary{{end}}" {{if eq .Report.State "acknowledged"}}aria-current="step"{{end}}><span class="mt-1">Acknowledged</span></li>
+        <li class="step {{if eq .Report.State "resolved"}}step-primary{{end}}" {{if eq .Report.State "resolved"}}aria-current="step"{{end}}><span class="mt-1">Resolved</span></li>
       </ol>
-      {{if awaitingDiagnosis .Report}}
-      <p class="text-xs text-center text-base-content/70 mt-2">
-        Temporal workflow running: correlating alerts → enriching context → AI triage agent
-      </p>
-      {{end}}
-    </div>
-  </nav>
+    </nav>
+    {{if awaitingDiagnosis .Report}}
+    <p class="text-xs text-center text-base-content/70">
+      Temporal workflow running: correlating alerts → enriching context → AI triage agent
+    </p>
+    {{end}}
+  </div>
 
   {{/* ═══ STATE-ADAPTIVE CONTENT ═══ */}}
   {{if awaitingDiagnosis .Report}}
   {{/* ── PROCESSING STATE: skeleton + progress ── */}}
-  <div class="card bg-base-100 shadow border-l-4 border-info">
+  <div class="card bg-base-100 shadow border border-base-300 border-l-4 border-info">
     <div class="card-body text-center py-8">
       <div class="flex flex-col items-center gap-4">
         <span class="loading loading-spinner loading-lg text-primary"></span>
@@ -82,42 +70,17 @@
       </div>
     </div>
   </div>
-
-  {{/* Skeleton placeholders for upcoming content */}}
-  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3" aria-hidden="true">
-    <div class="card bg-base-100 shadow-sm">
-      <div class="card-body py-3 px-4">
-        <div class="skeleton h-3 w-20 mb-2"></div>
-        <div class="skeleton h-6 w-32"></div>
-      </div>
-    </div>
-    <div class="card bg-base-100 shadow-sm">
-      <div class="card-body py-3 px-4">
-        <div class="skeleton h-3 w-24 mb-2"></div>
-        <div class="skeleton h-6 w-28"></div>
-      </div>
-    </div>
-    <div class="card bg-base-100 shadow-sm">
-      <div class="card-body py-3 px-4">
-        <div class="skeleton h-3 w-20 mb-2"></div>
-        <div class="skeleton h-6 w-16"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="card bg-base-100 shadow" aria-hidden="true">
-    <div class="card-body">
-      <div class="skeleton h-4 w-32 mb-3"></div>
-      <div class="skeleton h-3 w-full mb-2"></div>
-      <div class="skeleton h-3 w-4/5 mb-2"></div>
-      <div class="skeleton h-3 w-3/5"></div>
-    </div>
+  <div class="rounded-box border border-base-300 bg-base-100 p-4" aria-hidden="true">
+    <div class="skeleton h-4 w-32 mb-3"></div>
+    <div class="skeleton h-3 w-full mb-2"></div>
+    <div class="skeleton h-3 w-4/5 mb-2"></div>
+    <div class="skeleton h-3 w-3/5"></div>
   </div>
 
   {{else}}
-  {{/* ── REPORTED / ACKNOWLEDGED / RESOLVED STATE: full content ── */}}
+  {{/* ── DIAGNOSED STATE: ordered by the responder's questions ── */}}
 
-  {{/* Low-confidence warning */}}
+  {{/* Low-confidence warning (conditional) */}}
   {{if ltf .Report.Confidence 30.0}}
   <div class="alert alert-warning shadow" role="alert">
     {{icon "alert-triangle" "h-5 w-5 shrink-0"}}
@@ -128,177 +91,150 @@
   </div>
   {{end}}
 
-  {{/* Context: Blast Radius + Classification + Confidence */}}
-  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-    <div class="card bg-base-100 shadow-sm">
-      <div class="card-body py-3 px-4">
-        <div class="text-xs uppercase text-base-content/70 font-semibold">Blast Radius</div>
-        <div class="text-lg font-bold mt-1">{{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}}</div>
-      </div>
-    </div>
-    {{if .Report.Classification}}
-    <div class="card bg-base-100 shadow-sm">
-      <div class="card-body py-3 px-4">
-        <div class="text-xs uppercase text-base-content/70 font-semibold">Classification</div>
-        <div class="text-lg font-bold mt-1">{{.Report.Classification}}</div>
-      </div>
-    </div>
-    {{end}}
-    <div class="card bg-base-100 shadow-sm">
-      <div class="card-body py-3 px-4">
-        <div class="text-xs uppercase text-base-content/70 font-semibold">Confidence</div>
-        <div class="flex items-center gap-2 mt-1">
-          <div class="radial-progress text-primary text-xs"
-               style="--value:{{printf "%.0f" .Report.Confidence}};--size:2.5rem;--thickness:3px;"
-               role="progressbar" aria-valuemin="0" aria-valuemax="100"
-               aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
-               aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
-            {{printf "%.0f" .Report.Confidence}}%
-          </div>
-          <span class="text-lg font-bold">{{printf "%.0f" .Report.Confidence}}%</span>
+  {{/* HERO: Root Cause — the ONE elevated surface (shadow + border + severity
+       accent), so it survives the dark theme and reads as primary. Confidence
+       ring lives here once; blast/classification in the attached stats strip. */}}
+  <div class="card bg-base-100 shadow border border-base-300 border-l-4 {{if eq .Report.Severity "critical"}}border-error{{else if eq .Report.Severity "warning"}}border-warning{{else}}border-info{{end}}">
+    <div class="card-body gap-3">
+      <div class="flex justify-between items-start gap-4">
+        <div class="min-w-0">
+          <h2 class="text-xs uppercase tracking-wide text-base-content/60 font-semibold">Root Cause</h2>
+          <p class="text-lg leading-relaxed mt-1">{{.Report.RootCause}}</p>
+        </div>
+        <div class="radial-progress text-primary shrink-0"
+             style="--value:{{printf "%.0f" .Report.Confidence}};--size:3rem;--thickness:4px;"
+             role="progressbar" aria-valuemin="0" aria-valuemax="100"
+             aria-valuenow="{{printf "%.0f" .Report.Confidence}}"
+             aria-label="Confidence: {{printf "%.0f" .Report.Confidence}} percent">
+          <span class="text-xs font-semibold">{{printf "%.0f" .Report.Confidence}}%</span>
         </div>
       </div>
-    </div>
-  </div>
-
-  {{/* Action Bar — rendered from partial for htmx swap compatibility */}}
-  {{template "action-bar" .}}
-
-  {{/* Primary diagnosis — full width */}}
-  <div class="card bg-base-100 shadow">
-    <div class="card-body">
-      <h2 class="font-semibold">Root Cause</h2>
-      <p class="text-base-content/90 leading-relaxed">{{.Report.RootCause}}</p>
-    </div>
-  </div>
-
-  {{/* Verify the Diagnosis — read-only commands that confirm the agent's
-       findings, seeded by the classification + observed facts and targeted at
-       the affected pods. Full width, immediately after the root cause. */}}
-  {{if .L1Commands}}
-  <div class="card bg-base-100 shadow border-l-4 border-primary" x-data="commandList">
-    <div class="card-body">
-      <div class="flex justify-between items-start gap-2">
-        <div>
-          <h2 class="font-semibold">Verify the Diagnosis</h2>
-          <p class="text-xs text-base-content/70">Read-only commands to confirm the findings above.</p>
+      {{/* attribute strip */}}
+      <div class="stats stats-horizontal bg-base-200 border border-base-300 w-full">
+        <div class="stat py-2 px-4">
+          <div class="stat-title text-xs">Blast radius</div>
+          <div class="stat-value text-base font-medium">{{blastDots .Report.BlastRadius}} {{.Report.BlastRadius}}</div>
         </div>
-        <button class="btn btn-sm btn-primary gap-2"
-                aria-label="Copy all verification commands to clipboard"
-                @click="copyAll()">
-          <span x-show="!copied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
-          <span x-show="!copied"> Copy All</span>
-          <span x-show="copied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
-          <span x-show="copied" x-cloak> Copied!</span>
-        </button>
-      </div>
-      <div class="flex flex-col gap-2 mt-2">
-        {{range .L1Commands}}
-        <div class="bg-base-200 rounded-lg p-3" x-data="commandBlock">
-          <div class="flex justify-between items-start gap-2">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm mb-1">{{.Action}}</p>
-              <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-cmd>{{.Command}}</code>
-              {{if .Expected}}
-              <p class="text-xs text-base-content/70 mt-1">Confirms: {{.Expected}}</p>
-              {{end}}
-            </div>
-            <button class="btn btn-xs btn-ghost"
-                    aria-label="Copy command: {{.Action}}"
-                    @click="copy()">
-              <span x-show="!copied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
-              <span x-show="copied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
-            </button>
-          </div>
+        {{if .Report.Classification}}
+        <div class="stat py-2 px-4">
+          <div class="stat-title text-xs">Classification</div>
+          <div class="stat-value text-base font-medium">{{.Report.Classification}}</div>
         </div>
         {{end}}
       </div>
     </div>
   </div>
+
+  {{/* Verify the Diagnosis — flat panel (tier-2), confirm before acting. */}}
+  {{if .L1Commands}}
+  <section class="rounded-box border border-base-300 bg-base-100 p-4" x-data="commandList" aria-labelledby="verify-h">
+    <div class="flex justify-between items-start gap-2">
+      <div>
+        <h2 id="verify-h" class="font-semibold">Verify the Diagnosis</h2>
+        <p class="text-xs text-base-content/70">Read-only commands to confirm the findings above.</p>
+      </div>
+      <button class="btn btn-sm btn-primary gap-2"
+              aria-label="Copy all verification commands to clipboard"
+              @click="copyAll()">
+        <span x-show="!copied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
+        <span x-show="!copied"> Copy All</span>
+        <span x-show="copied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
+        <span x-show="copied" x-cloak> Copied!</span>
+      </button>
+    </div>
+    <div class="flex flex-col gap-2 mt-3">
+      {{range .L1Commands}}
+      <div class="bg-base-200 rounded-lg p-3" x-data="commandBlock">
+        <div class="flex justify-between items-start gap-2">
+          <div class="flex-1 min-w-0">
+            <p class="text-sm mb-1">{{.Action}}</p>
+            <code class="font-mono text-xs bg-base-300 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre" data-cmd>{{.Command}}</code>
+            {{if .Expected}}
+            <p class="text-xs text-base-content/70 mt-1">Confirms: {{.Expected}}</p>
+            {{end}}
+          </div>
+          <button class="btn btn-xs btn-ghost"
+                  aria-label="Copy command: {{.Action}}"
+                  @click="copy()">
+            <span x-show="!copied" aria-hidden="true">{{icon "clipboard-list" "h-4 w-4"}}</span>
+            <span x-show="copied" x-cloak aria-hidden="true">{{icon "check" "h-4 w-4"}}</span>
+          </button>
+        </div>
+      </div>
+      {{end}}
+    </div>
+  </section>
   {{end}}
 
-  {{/* Two-column layout: Supporting detail (left) + Timeline (right) */}}
-  <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
-
-    {{/* Left column: Supporting detail — 3 of 5 columns */}}
-    <div class="lg:col-span-3 lg:order-1 order-2 flex flex-col gap-4">
-      {{/* Causal Chain */}}
-      {{if gt (len .Report.CausalChain) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow" open>
-        <summary class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</summary>
-        <div class="collapse-content">
-          <ul class="steps steps-vertical">
-            {{range .Report.CausalChain}}
-            <li class="step step-primary">{{.}}</li>
-            {{end}}
-          </ul>
+  {{/* Recommended Actions — promoted from a bottom accordion to a visible,
+       flat panel (tier-2). This is the "what do I do" answer. */}}
+  {{if .AgentRecs}}
+  <section class="rounded-box border border-base-300 bg-base-100 p-4" aria-labelledby="recs-h">
+    <h2 id="recs-h" class="font-semibold mb-3">Recommended Actions ({{len .AgentRecs}})</h2>
+    <ul class="flex flex-col gap-3">
+      {{range .AgentRecs}}
+      <li class="flex flex-col gap-1">
+        <div class="flex justify-between items-center gap-2">
+          <span class="font-medium text-sm">{{.Action}}</span>
+          <span class="badge badge-sm {{riskClass .Risk}}">Risk: {{.Risk}}</span>
         </div>
-      </details>
+        {{if .Command}}
+        <code class="font-mono text-xs bg-base-200 p-2 rounded-lg block overflow-x-auto border border-base-content/10 whitespace-pre">{{.Command}}</code>
+        {{end}}
+      </li>
       {{end}}
+    </ul>
+  </section>
+  {{end}}
 
-      {{/* Evidence — open by default so the data behind the diagnosis (which the
-           low-confidence warning asks responders to verify) is visible without a click. */}}
-      {{if gt (len .Report.Evidence) 0}}
-      <details class="collapse collapse-arrow bg-base-100 shadow" open>
-        <summary class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</summary>
-        <div class="collapse-content">
-          <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Evidence table, scrollable">
-            <table class="table table-sm">
-              <thead>
-                <tr>
-                  <th>Observation</th>
-                  <th>Source</th>
-                  <th>Strength</th>
-                </tr>
-              </thead>
-              <tbody>
-                {{range .Report.Evidence}}
-                <tr>
-                  <td>{{.Observation}}</td>
-                  <td class="font-mono text-xs">{{.Source}}</td>
-                  <td><span class="badge badge-sm {{strengthClass .Strength}}">{{.Strength}}</span></td>
-                </tr>
-                {{end}}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </details>
-      {{end}}
+  {{/* Action Bar — buttons to act, below the diagnosis + recommendations. */}}
+  {{template "action-bar" .}}
 
-      {{/* Agent Recommendations */}}
-      {{if .AgentRecs}}
-      <details class="collapse collapse-arrow bg-base-100 shadow">
-        <summary class="collapse-title font-semibold">
-          Agent Recommendations ({{len .AgentRecs}})
-        </summary>
-        <div class="collapse-content">
-          <div class="flex flex-col gap-2">
-            {{range .AgentRecs}}
-            <div class="alert">
-              <div class="flex flex-col gap-1 w-full min-w-0">
-                <div class="flex justify-between items-center">
-                  <span class="font-semibold text-sm">{{.Action}}</span>
-                  <span class="badge badge-sm {{riskClass .Risk}}">Risk: {{.Risk}}</span>
-                </div>
-                {{if .Command}}
-                <code class="font-mono text-xs bg-base-200 p-2 rounded-lg block overflow-x-auto border border-base-content/10 mt-1 whitespace-pre">{{.Command}}</code>
-                {{end}}
-              </div>
-            </div>
-            {{end}}
-          </div>
-        </div>
-      </details>
-      {{end}}
+  {{/* Supporting forensics — demoted, collapsed by default. Evidence auto-opens
+       when confidence is low (the warning above tells responders to verify it). */}}
+  {{if gt (len .Report.CausalChain) 0}}
+  <details class="collapse collapse-arrow border border-base-300 bg-base-100">
+    <summary class="collapse-title font-semibold">Causal Chain ({{len .Report.CausalChain}} steps)</summary>
+    <div class="collapse-content">
+      <ul class="steps steps-vertical">
+        {{range .Report.CausalChain}}
+        <li class="step step-primary">{{.}}</li>
+        {{end}}
+      </ul>
     </div>
+  </details>
+  {{end}}
 
-    {{/* Right column: Timeline — 2 of 5 columns, appears first on mobile */}}
-    <div class="lg:col-span-2 lg:order-2 order-1 flex flex-col gap-4">
-      {{/* Timeline & Notes */}}
-      {{template "timeline" .}}
+  {{if gt (len .Report.Evidence) 0}}
+  <details class="collapse collapse-arrow border border-base-300 bg-base-100" {{if ltf .Report.Confidence 30.0}}open{{end}}>
+    <summary class="collapse-title font-semibold">Evidence ({{len .Report.Evidence}})</summary>
+    <div class="collapse-content">
+      <div class="overflow-x-auto" tabindex="0" role="region" aria-label="Evidence table, scrollable">
+        <table class="table table-sm">
+          <thead>
+            <tr>
+              <th>Observation</th>
+              <th>Source</th>
+              <th>Strength</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Report.Evidence}}
+            <tr>
+              <td>{{.Observation}}</td>
+              <td class="font-mono text-xs">{{.Source}}</td>
+              <td><span class="badge badge-sm {{strengthClass .Strength}}">{{.Strength}}</span></td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
     </div>
-  </div>
+  </details>
+  {{end}}
+
+  {{/* Timeline & Notes — full width, bottom. */}}
+  {{template "timeline" .}}
   {{end}}{{/* end state-adaptive */}}
 </div>
 {{end}}
