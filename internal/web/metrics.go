@@ -119,7 +119,19 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
-// normalizePath reduces cardinality by collapsing dynamic segments.
+// Flush implements http.Flusher so streaming handlers (the SSE endpoint) keep
+// working when wrapped. The SSE handler does a `w.(http.Flusher)` assertion;
+// without this method that assertion would fail and disable streaming.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// normalizePath reduces cardinality by collapsing dynamic :id segments to a
+// fixed set of route labels. Every live route the web handler serves maps to a
+// distinct label so per-endpoint request/latency metrics are usable; anything
+// unrecognized falls through to "/other".
 func normalizePath(path string) string {
 	switch {
 	case path == "/" || path == "/dashboard":
@@ -132,10 +144,33 @@ func normalizePath(path string) string {
 		return "/partials/stats"
 	case path == "/partials/incidents":
 		return "/partials/incidents"
-	case strings.HasPrefix(path, "/reports/"):
-		return "/reports/:id"
 	case strings.HasPrefix(path, "/static/"):
 		return "/static/*"
+	case strings.HasPrefix(path, "/api/incidents/"):
+		switch {
+		case strings.HasSuffix(path, "/acknowledge"):
+			return "/api/incidents/:id/acknowledge"
+		case strings.HasSuffix(path, "/escalate"):
+			return "/api/incidents/:id/escalate"
+		case strings.HasSuffix(path, "/notes"):
+			return "/api/incidents/:id/notes"
+		case strings.HasSuffix(path, "/retriage"):
+			return "/api/incidents/:id/retriage"
+		default:
+			return "/api/incidents/:id/*"
+		}
+	case strings.HasPrefix(path, "/incidents/"):
+		if strings.HasSuffix(path, "/resolve") {
+			return "/incidents/:id/resolve"
+		}
+		return "/incidents/:id"
+	case strings.HasPrefix(path, "/reports/"):
+		// Legacy paths: /reports/:id (301 → /incidents/:id) and the still-served
+		// /reports/:id/resolve alias.
+		if strings.HasSuffix(path, "/resolve") {
+			return "/reports/:id/resolve"
+		}
+		return "/reports/:id"
 	default:
 		return "/other"
 	}

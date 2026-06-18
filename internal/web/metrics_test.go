@@ -50,7 +50,14 @@ func TestNormalizePath(t *testing.T) {
 		{"/partials/incidents", "/partials/incidents"},
 		{"/reports/123", "/reports/:id"},
 		{"/reports/abc-def", "/reports/:id"},
+		{"/reports/123/resolve", "/reports/:id/resolve"},
 		{"/static/css/app.css", "/static/*"},
+		{"/incidents/42", "/incidents/:id"},
+		{"/incidents/42/resolve", "/incidents/:id/resolve"},
+		{"/api/incidents/42/acknowledge", "/api/incidents/:id/acknowledge"},
+		{"/api/incidents/42/escalate", "/api/incidents/:id/escalate"},
+		{"/api/incidents/42/notes", "/api/incidents/:id/notes"},
+		{"/api/incidents/42/retriage", "/api/incidents/:id/retriage"},
 		{"/unknown/path", "/other"},
 	}
 	for _, tt := range tests {
@@ -91,6 +98,22 @@ func TestResponseWriter_Unwrap(t *testing.T) {
 
 	if rw.Unwrap() != rec {
 		t.Error("Unwrap should return the underlying ResponseWriter")
+	}
+}
+
+func TestResponseWriter_ImplementsFlusher(t *testing.T) {
+	rec := httptest.NewRecorder() // *httptest.ResponseRecorder implements http.Flusher
+	rw := &responseWriter{ResponseWriter: rec, statusCode: http.StatusOK}
+
+	// The SSE handler does `w.(http.Flusher)`; the wrapped writer must satisfy
+	// it or streaming breaks when InstrumentHandler is in the chain.
+	f, ok := http.ResponseWriter(rw).(http.Flusher)
+	if !ok {
+		t.Fatal("responseWriter must implement http.Flusher")
+	}
+	f.Flush()
+	if !rec.Flushed {
+		t.Error("Flush should delegate to the underlying writer")
 	}
 }
 

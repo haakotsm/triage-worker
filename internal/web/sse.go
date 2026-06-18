@@ -203,10 +203,13 @@ func (b *SSEBroker) subscribe() (chan SSEEvent, func(), error) {
 	}
 	ch := make(chan SSEEvent, 16)
 	b.clients[ch] = struct{}{}
+	SetSSEClientCount(len(b.clients))
 	unsub := func() {
 		b.mu.Lock()
 		delete(b.clients, ch)
+		n := len(b.clients)
 		b.mu.Unlock()
+		SetSSEClientCount(n)
 	}
 	return ch, unsub, nil
 }
