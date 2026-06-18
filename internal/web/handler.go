@@ -152,7 +152,7 @@ type Handler struct {
 	static   http.Handler
 	db       *sql.DB
 	logger   *slog.Logger
-	sse      *SSEBroker // optional: nil if SSE not configured
+	sse      *SSEBroker      // optional: nil if SSE not configured
 	retriage RetrieveStarter // optional: starts re-triage workflows
 }
 
@@ -267,14 +267,14 @@ func (h *Handler) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	data, err := h.fetchDashboardData(r)
 	if err != nil {
 		h.logger.Error("fetch dashboard data", "error", err)
-		h.renderError(w, "Failed to load reports")
+		h.renderError(w, r, "Failed to load reports")
 		return
 	}
 
 	if isHTMX(r) {
-		h.render(w, "report-table", data)
+		h.render(w, r, "report-table", data)
 	} else {
-		h.render(w, "dashboard", data)
+		h.render(w, r, "dashboard", data)
 	}
 }
 
@@ -282,20 +282,20 @@ func (h *Handler) handlePartialReports(w http.ResponseWriter, r *http.Request) {
 	data, err := h.fetchReportTableData(r)
 	if err != nil {
 		h.logger.Error("fetch partial data", "error", err)
-		h.renderError(w, "Failed to load reports")
+		h.renderError(w, r, "Failed to load reports")
 		return
 	}
-	h.render(w, "report-table", data)
+	h.render(w, r, "report-table", data)
 }
 
 func (h *Handler) handlePartialStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.fetchStats(r.Context())
 	if err != nil {
 		h.logger.Error("fetch stats", "error", err)
-		h.renderError(w, "Failed to load stats")
+		h.renderError(w, r, "Failed to load stats")
 		return
 	}
-	h.render(w, "stats-panel", stats)
+	h.render(w, r, "stats-panel", stats)
 }
 
 func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +308,7 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 	report, err := h.fetchReport(r.Context(), idStr)
 	if err != nil {
 		h.logger.Error("fetch report", "error", err, "id", idStr)
-		h.renderError(w, "Failed to load report")
+		h.renderError(w, r, "Failed to load report")
 		return
 	}
 	if report == nil {
@@ -352,19 +352,19 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isHTMX(r) {
-		h.render(w, "detail-content", data)
+		h.render(w, r, "detail-content", data)
 	} else {
-		h.render(w, "detail", data)
+		h.render(w, r, "detail", data)
 	}
 }
 
-func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
+func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, data interface{}) {
 	var buf bytes.Buffer
 	// Full-page renders use per-page template sets; partials use shared set
 	if tmpl, ok := h.pages[name]; ok {
 		if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 			h.logger.Error("render page", "error", err, "template", name)
-			h.renderError(w, "Internal error")
+			h.renderError(w, r, "Internal error")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -375,7 +375,7 @@ func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
 	}
 	if err := h.partials.ExecuteTemplate(&buf, name, data); err != nil {
 		h.logger.Error("render partial", "error", err, "template", name)
-		h.renderError(w, "Internal error")
+		h.renderError(w, r, "Internal error")
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -384,12 +384,88 @@ func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
 	}
 }
 
-func (h *Handler) renderError(w http.ResponseWriter, msg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusInternalServerError)
-	if err := h.partials.ExecuteTemplate(w, "error", map[string]string{"Message": msg}); err != nil {
+// renderError renders the styled error partial. htmx discards the bodies of
+// non-2xx responses by default, so for htmx requests we return HTTP 200 to
+// guarantee the fragment is swapped into the target panel; full-page loads
+// still get a 500. Buffered so a template failure never half-writes a body.
+func (h *Handler) renderError(w http.ResponseWriter, r *http.Request, msg string) {
+	var buf bytes.Buffer
+	if err := h.partials.ExecuteTemplate(&buf, "error", map[string]string{"Message": msg}); err != nil {
 		h.logger.Error("render error template", "error", err)
+		http.Error(w, msg, http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if isHTMX(r) {
+		// 200 so htmx swaps the fragment, but this masks a real 5xx from
+		// http_requests_total — keep an out-of-band signal for alerting.
+		recordMaskedError("panel")
+	} else {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+	if _, err := buf.WriteTo(w); err != nil {
+		h.logger.Debug("write error response", "error", err)
+	}
+}
+
+// toastTrigger builds an HX-Trigger header value that init.js turns into a
+// toast notification. level is one of "error", "warning", "success", "info".
+func toastTrigger(level, msg string) string {
+	b, err := json.Marshal(map[string]any{
+		"toast": map[string]string{"level": level, "message": msg},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// hxError reports a failed action to the client. For htmx requests it returns
+// HTTP 200 with an HX-Trigger toast and no DOM swap (a 4xx/5xx body would be
+// discarded, leaving the operator with only a status-code toast); non-htmx
+// clients still get a JSON error with the real status code.
+func (h *Handler) hxError(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if isHTMX(r) {
+		if status >= http.StatusInternalServerError {
+			// A genuine server error masked as 200 — preserve an alerting signal
+			// (expected 4xx conflicts/validation are intentionally not counted).
+			recordMaskedError("action")
+		}
+		w.Header().Set("HX-Reswap", "none")
+		if t := toastTrigger("error", msg); t != "" {
+			w.Header().Set("HX-Trigger", t)
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// hxStateConflict handles an action that no-opped because the incident changed
+// underneath (e.g. already acknowledged/resolved). For htmx it re-renders the
+// action-bar so the operator sees the true current state, plus a warning toast;
+// non-htmx clients get a JSON 409.
+func (h *Handler) hxStateConflict(w http.ResponseWriter, r *http.Request, id int64, msg string) {
+	if !isHTMX(r) {
+		h.hxError(w, r, http.StatusConflict, msg)
+		return
+	}
+	report, err := h.fetchReport(r.Context(), strconv.FormatInt(id, 10))
+	if err != nil || report == nil {
+		// Can't show the true state — fall back to a toast and leave the DOM as-is.
+		w.Header().Set("HX-Reswap", "none")
+		if t := toastTrigger("warning", msg); t != "" {
+			w.Header().Set("HX-Trigger", t)
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if t := toastTrigger("warning", msg); t != "" {
+		w.Header().Set("HX-Trigger", t)
+	}
+	h.render(w, r, "action-bar", map[string]any{"Report": report})
 }
 
 // fetchDashboardData queries reports for the dashboard.
@@ -845,7 +921,7 @@ func templateFuncs() template.FuncMap {
 			}
 			return a / b
 		},
-		"mul":   func(a, b int) int { return a * b },
+		"mul": func(a, b int) int { return a * b },
 		"deref": func(t *time.Time) time.Time {
 			if t == nil {
 				return time.Time{}
@@ -1008,10 +1084,10 @@ func (h *Handler) handlePartialIncidents(w http.ResponseWriter, r *http.Request)
 	incidents, err := FetchActiveIncidents(r.Context(), h.db)
 	if err != nil {
 		h.logger.Error("fetch incidents", "error", err)
-		h.renderError(w, "Failed to load incidents")
+		h.renderError(w, r, "Failed to load incidents")
 		return
 	}
-	h.render(w, "incidents-table", map[string]interface{}{
+	h.render(w, r, "incidents-table", map[string]interface{}{
 		"Incidents": incidents,
 	})
 }
@@ -1029,13 +1105,13 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 	path = strings.TrimPrefix(path, "/reports/")
 	idStr := strings.TrimSuffix(path, "/resolve")
 	if idStr == "" {
-		http.Error(w, "Missing incident ID", http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "missing incident ID")
 		return
 	}
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		http.Error(w, "Invalid report ID", http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "invalid incident ID")
 		return
 	}
 
@@ -1070,7 +1146,7 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		 WHERE id = $1 AND state != 'resolved'`, id, body.Note, body.Source)
 	if err != nil {
 		h.logger.Error("resolve report", "error", err, "id", id)
-		http.Error(w, "Failed to resolve", http.StatusInternalServerError)
+		h.hxError(w, r, http.StatusInternalServerError, "failed to resolve incident")
 		return
 	}
 
@@ -1096,11 +1172,17 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		report, fetchErr := h.fetchReport(r.Context(), idStr)
 		if fetchErr != nil {
 			h.logger.Error("fetch report for htmx response", "error", fetchErr)
-			http.Error(w, "Internal error", http.StatusInternalServerError)
+			h.hxError(w, r, http.StatusInternalServerError, "internal error")
 			return
 		}
-		w.Header().Set("HX-Trigger", "report-resolved")
-		h.render(w, "action-bar", map[string]any{"Report": report})
+		if report == nil {
+			h.hxError(w, r, http.StatusNotFound, "incident not found")
+			return
+		}
+		// Live refresh of other clients is driven by PG NOTIFY → SSE above; here
+		// we just confirm to the acting user with a success toast.
+		w.Header().Set("HX-Trigger", toastTrigger("success", "Incident resolved"))
+		h.render(w, r, "action-bar", map[string]any{"Report": report})
 		return
 	}
 
@@ -1109,6 +1191,11 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRetriage triggers a re-triage workflow for an existing incident.
+//
+// NOTE: this endpoint is not yet wired to any UI control, so it still returns
+// raw JSON / non-2xx errors rather than going through hxError/hxStateConflict
+// like the other action handlers. When the Retriage button is added (UI audit
+// task #4), migrate these error paths to the htmx-aware helpers for parity.
 func (h *Handler) handleRetriage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1193,7 +1280,7 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 
 	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/acknowledge")
 	if err != nil {
-		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "invalid incident ID")
 		return
 	}
 
@@ -1209,7 +1296,7 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 		assignee = user.Email
 	}
 	if assignee == "" {
-		http.Error(w, `{"error":"assignee required"}`, http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "assignee required")
 		return
 	}
 
@@ -1221,13 +1308,13 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 		id, assignee)
 	if err != nil {
 		h.logger.Error("acknowledge incident", "error", err, "id", id)
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		h.hxError(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		http.Error(w, `{"error":"incident not found or already acknowledged/resolved"}`, http.StatusConflict)
+		h.hxStateConflict(w, r, id, "Incident already acknowledged or resolved")
 		return
 	}
 
@@ -1238,10 +1325,11 @@ func (h *Handler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
 		if fetchErr != nil {
 			h.logger.Error("fetch report for htmx response", "error", fetchErr)
-			http.Error(w, "Internal error", http.StatusInternalServerError)
+			h.hxError(w, r, http.StatusInternalServerError, "internal error")
 			return
 		}
-		h.render(w, "action-bar", map[string]any{"Report": report})
+		w.Header().Set("HX-Trigger", toastTrigger("success", "Incident acknowledged"))
+		h.render(w, r, "action-bar", map[string]any{"Report": report})
 		return
 	}
 
@@ -1263,7 +1351,7 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 
 	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/escalate")
 	if err != nil {
-		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "invalid incident ID")
 		return
 	}
 
@@ -1272,7 +1360,7 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 		Target string `json:"target"`
 	}
 	if r.Body == nil {
-		http.Error(w, `{"error":"request body required"}`, http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "request body required")
 		return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1283,7 +1371,7 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 			body.Target = r.FormValue("target")
 		}
 		if body.Level == "" {
-			http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+			h.hxError(w, r, http.StatusBadRequest, "invalid request body")
 			return
 		}
 	}
@@ -1292,11 +1380,11 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 	switch body.Level {
 	case "L1", "L2", "L3":
 	default:
-		http.Error(w, `{"error":"level must be L1, L2, or L3"}`, http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "level must be L1, L2, or L3")
 		return
 	}
 	if body.Target == "" {
-		http.Error(w, `{"error":"target required"}`, http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "escalation target required")
 		return
 	}
 
@@ -1308,13 +1396,13 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 		id, body.Level, body.Target)
 	if err != nil {
 		h.logger.Error("escalate incident", "error", err, "id", id)
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		h.hxError(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		http.Error(w, `{"error":"incident not found or already resolved"}`, http.StatusConflict)
+		h.hxStateConflict(w, r, id, "Incident not found or already resolved")
 		return
 	}
 
@@ -1325,10 +1413,11 @@ func (h *Handler) handleEscalate(w http.ResponseWriter, r *http.Request) {
 		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
 		if fetchErr != nil {
 			h.logger.Error("fetch report for htmx response", "error", fetchErr)
-			http.Error(w, "Internal error", http.StatusInternalServerError)
+			h.hxError(w, r, http.StatusInternalServerError, "internal error")
 			return
 		}
-		h.render(w, "action-bar", map[string]any{"Report": report})
+		w.Header().Set("HX-Trigger", toastTrigger("success", "Incident escalated to "+body.Level))
+		h.render(w, r, "action-bar", map[string]any{"Report": report})
 		return
 	}
 
@@ -1350,7 +1439,7 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 
 	id, err := extractIncidentID(r.URL.Path, "/api/incidents/", "/notes")
 	if err != nil {
-		http.Error(w, "Invalid incident ID", http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "invalid incident ID")
 		return
 	}
 
@@ -1358,15 +1447,15 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		Body string `json:"body"`
 	}
 	if r.Body == nil {
-		http.Error(w, `{"error":"request body required"}`, http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "request body required")
 		return
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if body.Body == "" {
-		http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
+		h.hxError(w, r, http.StatusBadRequest, "note body is required")
 		return
 	}
 
@@ -1384,11 +1473,11 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var pgErr *pq.Error
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			http.Error(w, `{"error":"incident not found"}`, http.StatusNotFound)
+			h.hxError(w, r, http.StatusNotFound, "incident not found")
 			return
 		}
 		h.logger.Error("add note", "error", err, "incident_id", id)
-		http.Error(w, `{"error":"failed to add note"}`, http.StatusInternalServerError)
+		h.hxError(w, r, http.StatusInternalServerError, "failed to add note")
 		return
 	}
 
@@ -1397,25 +1486,29 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 	// If htmx request, return the timeline partial for the entire incident
 	if isHTMX(r) {
 		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
-		if fetchErr != nil {
+		if fetchErr != nil || report == nil {
+			// The note is persisted; we just can't re-render the timeline. Leave the
+			// existing DOM (and the add-note form) intact and toast instead of swapping
+			// in a static warning that would destroy the form.
 			h.logger.Error("fetch report for timeline", "error", fetchErr, "incident_id", id)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte(`<div id="incident-timeline" class="alert alert-warning">Note saved. Refresh to see timeline.</div>`))
-			return
-		}
-		if report != nil {
-			notes, notesErr := h.fetchNotes(r.Context(), report.ID)
-			if notesErr != nil {
-				h.logger.Error("fetch notes for timeline", "error", notesErr, "incident_id", id)
+			w.Header().Set("HX-Reswap", "none")
+			if t := toastTrigger("warning", "Note saved — refresh to see it in the timeline"); t != "" {
+				w.Header().Set("HX-Trigger", t)
 			}
-			timeline := h.buildTimeline(report, notes)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			h.render(w, "timeline", map[string]any{
-				"Timeline": timeline,
-				"Report":   report,
-			})
+			w.WriteHeader(http.StatusOK)
 			return
 		}
+		notes, notesErr := h.fetchNotes(r.Context(), report.ID)
+		if notesErr != nil {
+			h.logger.Error("fetch notes for timeline", "error", notesErr, "incident_id", id)
+		}
+		timeline := h.buildTimeline(report, notes)
+		w.Header().Set("HX-Trigger", toastTrigger("success", "Note added"))
+		h.render(w, r, "timeline", map[string]any{
+			"Timeline": timeline,
+			"Report":   report,
+		})
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

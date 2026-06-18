@@ -4,8 +4,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestNewHandler_TemplatesParse(t *testing.T) {
@@ -120,6 +123,156 @@ func TestUnknownPath_Returns404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("GET /nonexistent = %d, want 404", w.Code)
+	}
+}
+
+func TestToastTrigger(t *testing.T) {
+	got := toastTrigger("error", "already acknowledged")
+	want := `{"toast":{"level":"error","message":"already acknowledged"}}`
+	if got != want {
+		t.Errorf("toastTrigger() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderError_HTMXReturns200(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	// htmx requests must get 200 so the fragment is swapped (htmx discards
+	// non-2xx bodies); full-page loads keep the 500.
+	t.Run("htmx", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/partials/stats", nil)
+		req.Header.Set("HX-Request", "true")
+		w := httptest.NewRecorder()
+		h.renderError(w, req, "Failed to load stats")
+		if w.Code != http.StatusOK {
+			t.Errorf("renderError(htmx) status = %d, want 200", w.Code)
+		}
+		if body := w.Body.String(); !strings.Contains(body, "Failed to load stats") {
+			t.Errorf("renderError(htmx) body missing message: %q", body)
+		}
+	})
+
+	t.Run("full-page", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		h.renderError(w, req, "Failed to load stats")
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("renderError(full-page) status = %d, want 500", w.Code)
+		}
+	})
+}
+
+func TestHXError(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	t.Run("htmx toast with no swap", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/incidents/1/acknowledge", nil)
+		req.Header.Set("HX-Request", "true")
+		w := httptest.NewRecorder()
+		h.hxError(w, req, http.StatusConflict, "already acknowledged")
+		if w.Code != http.StatusOK {
+			t.Errorf("hxError(htmx) status = %d, want 200 (so htmx processes headers)", w.Code)
+		}
+		if got := w.Header().Get("HX-Reswap"); got != "none" {
+			t.Errorf("hxError(htmx) HX-Reswap = %q, want none", got)
+		}
+		if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "already acknowledged") {
+			t.Errorf("hxError(htmx) HX-Trigger = %q, want it to carry the message", got)
+		}
+	})
+
+	t.Run("non-htmx keeps status and json", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/incidents/1/acknowledge", nil)
+		w := httptest.NewRecorder()
+		h.hxError(w, req, http.StatusConflict, "already acknowledged")
+		if w.Code != http.StatusConflict {
+			t.Errorf("hxError(non-htmx) status = %d, want 409", w.Code)
+		}
+		if body := w.Body.String(); !strings.Contains(body, `"error"`) {
+			t.Errorf("hxError(non-htmx) body = %q, want json error", body)
+		}
+	})
+}
+
+func TestHXStateConflict_NonHTMXReturns409(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	// Non-htmx clients must still get a real 409 (no DB touched on this path).
+	req := httptest.NewRequest("POST", "/api/incidents/1/acknowledge", nil)
+	w := httptest.NewRecorder()
+	h.hxStateConflict(w, req, 1, "already acknowledged")
+	if w.Code != http.StatusConflict {
+		t.Errorf("hxStateConflict(non-htmx) status = %d, want 409", w.Code)
+	}
+}
+
+func TestHandleAcknowledge_InvalidIDHTMX(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	// Invalid ID fails before any DB access; htmx must get 200 + toast, not a
+	// discarded 400.
+	req := httptest.NewRequest("POST", "/api/incidents/not-a-number/acknowledge", nil)
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("HX-Reswap"); got != "none" {
+		t.Errorf("HX-Reswap = %q, want none", got)
+	}
+	if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "invalid incident ID") {
+		t.Errorf("HX-Trigger = %q, want it to carry the error message", got)
+	}
+}
+
+func TestHandleAcknowledge_ConflictHTMX(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	h, err := NewHandler(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	// UPDATE matches 0 rows (already acknowledged/resolved), then fetchReport
+	// finds no row → hxStateConflict falls back to a toast with no swap.
+	mock.ExpectExec("UPDATE triage.reports").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT id, workflow_id").
+		WillReturnRows(sqlmock.NewRows([]string{"id"})) // empty → report == nil
+
+	req := httptest.NewRequest("POST", "/api/incidents/5/acknowledge",
+		strings.NewReader(`{"assignee":"alice@example.com"}`))
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (conflict must not be a discarded 409)", w.Code)
+	}
+	if got := w.Header().Get("HX-Reswap"); got != "none" {
+		t.Errorf("HX-Reswap = %q, want none", got)
+	}
+	if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "already acknowledged") {
+		t.Errorf("HX-Trigger = %q, want the conflict message", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
 }
 
