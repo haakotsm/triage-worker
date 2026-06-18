@@ -322,8 +322,18 @@ func (b *SSEBroker) BroadcastStatsUpdate(ctx context.Context) {
 		ActiveCount  int `json:"active_incidents"`
 	}
 	var s statsPayload
-	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state = 'reported'`).Scan(&s.TotalReports)
-	_ = b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state IN ('processing', 'reported', 'acknowledged')`).Scan(&s.ActiveCount)
-	data, _ := json.Marshal(s)
+	if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state = 'reported'`).Scan(&s.TotalReports); err != nil {
+		b.logger.Error("broadcast stats: count reported", "error", err)
+		return
+	}
+	if err := b.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM triage.reports WHERE state IN ('processing', 'reported', 'acknowledged')`).Scan(&s.ActiveCount); err != nil {
+		b.logger.Error("broadcast stats: count active", "error", err)
+		return
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		b.logger.Error("broadcast stats: marshal", "error", err)
+		return
+	}
 	b.broadcast(SSEEvent{Name: "stats-update", Data: string(data)})
 }

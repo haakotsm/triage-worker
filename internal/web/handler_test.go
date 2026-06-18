@@ -459,6 +459,47 @@ func TestDetailContent_RefreshTriggerFollowsSSE(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	req := httptest.NewRequest("GET", "/static/output.css", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	csp := w.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'self'", "frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP missing %q; got %q", want, csp)
+		}
+	}
+	if got := w.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
+	}
+}
+
+func TestHandleAcknowledge_MalformedBodyHTMX(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+	// A present-but-malformed JSON body is a client error (fails before any DB
+	// access), surfaced as a toast for htmx rather than a confusing
+	// "assignee required".
+	req := httptest.NewRequest("POST", "/api/incidents/1/acknowledge", strings.NewReader("{not json"))
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("HX-Trigger"); !strings.Contains(got, "invalid request body") {
+		t.Errorf("HX-Trigger = %q, want the invalid-body message", got)
+	}
+}
+
 func TestBuildTimeline(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {
