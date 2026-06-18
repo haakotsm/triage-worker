@@ -1,0 +1,9 @@
+{{/* Canonical incident status badges (state + owner + escalation). Takes a
+     Report. Rendered inside #incident-status in the header, and emitted as an
+     hx-swap-oob copy by the action handlers so the header stays in sync after
+     acknowledge / escalate / resolve. */}}
+{{define "incident-status-badges"}}
+<span class="badge {{incidentStateClass .State}} gap-1">{{stateIcon .State}} {{stateLabel .State}}</span>
+{{if .AssignedTo}}<span class="badge badge-outline badge-sm gap-1">{{icon "user" "h-3 w-3"}} {{.AssignedTo}}</span>{{end}}
+{{if .EscalationLevel}}<span class="badge badge-warning badge-sm gap-1">{{icon "arrow-up" "h-3 w-3"}} {{.EscalationLevel}}</span>{{end}}
+{{end}}

@@ -470,7 +470,7 @@ func (h *Handler) hxStateConflict(w http.ResponseWriter, r *http.Request, id int
 	if t := toastTrigger("warning", msg); t != "" {
 		w.Header().Set("HX-Trigger", t)
 	}
-	h.render(w, r, "action-bar", map[string]any{"Report": report})
+	h.render(w, r, "action-response", map[string]any{"Report": report})
 }
 
 // respondActionBar re-renders the action-bar for the incident after a
@@ -488,7 +488,7 @@ func (h *Handler) respondActionBar(w http.ResponseWriter, r *http.Request, id in
 		return
 	}
 	w.Header().Set("HX-Trigger", toastTrigger("success", toastMsg))
-	h.render(w, r, "action-bar", map[string]any{"Report": report})
+	h.render(w, r, "action-response", map[string]any{"Report": report})
 }
 
 // fetchDashboardData queries reports for the dashboard.
@@ -1214,7 +1214,7 @@ func (h *Handler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		// Live refresh of other clients is driven by PG NOTIFY → SSE above; here
 		// we just confirm to the acting user with a success toast.
 		w.Header().Set("HX-Trigger", toastTrigger("success", "Incident resolved"))
-		h.render(w, r, "action-bar", map[string]any{"Report": report})
+		h.render(w, r, "action-response", map[string]any{"Report": report})
 		return
 	}
 

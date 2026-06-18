@@ -1,0 +1,11 @@
+{{/* Workflow progress steps. Takes a Report. aria-current marks the step that
+     matches the incident's real state (not a hardcoded one). Rendered inside
+     #incident-stepper in the header and emitted hx-swap-oob on actions. */}}
+{{define "workflow-stepper"}}
+<ol class="steps steps-horizontal w-full text-xs">
+  <li class="step step-primary" {{if or (eq .State "processing") (eq .State "correlating") (eq .State "enriching") (eq .State "triaging")}}aria-current="step"{{end}}><span class="mt-1">Processing</span></li>
+  <li class="step {{if or (eq .State "reported") (eq .State "acknowledged") (eq .State "resolved")}}step-primary{{end}}" {{if eq .State "reported"}}aria-current="step"{{end}}><span class="mt-1">Reported</span></li>
+  <li class="step {{if or (eq .State "acknowledged") (eq .State "resolved")}}step-primary{{end}}" {{if eq .State "acknowledged"}}aria-current="step"{{end}}><span class="mt-1">Acknowledged</span></li>
+  <li class="step {{if eq .State "resolved"}}step-primary{{end}}" {{if eq .State "resolved"}}aria-current="step"{{end}}><span class="mt-1">Resolved</span></li>
+</ol>
+{{end}}
