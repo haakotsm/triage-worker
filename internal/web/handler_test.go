@@ -432,15 +432,29 @@ func TestDetailContent_RefreshTriggerFollowsSSE(t *testing.T) {
 	if strings.Contains(withSSE, "every 5s") {
 		t.Error("SSE-enabled detail must not self-poll every 5s")
 	}
-	// The refresh must target the inner body (so the sse-connect wrapper isn't
-	// torn down) and select only that fragment.
+	// The refresh must select AND target the inner body (so the sse-connect
+	// wrapper isn't torn down). Targeting #detail-container instead would
+	// silently reintroduce the EventSource-teardown bug this fixes.
 	if !strings.Contains(withSSE, `hx-select="#detail-body"`) {
 		t.Error("detail refresh should hx-select the inner body to preserve the SSE connection")
+	}
+	if !strings.Contains(withSSE, `hx-target="#detail-body"`) {
+		t.Error("detail refresh must target #detail-body, not the sse-connect #detail-container")
 	}
 
 	noSSE := render(false)
 	if !strings.Contains(noSSE, "every 5s") {
 		t.Error("SSE-disabled detail should fall back to a 5s poll")
+	}
+
+	// Once a diagnosis lands the incident is no longer awaiting, so the inner
+	// body must carry no refresh trigger at all (the other half of the feature).
+	w := httptest.NewRecorder()
+	done := Report{ID: 1, State: "reported", RootCause: "OOMKilled: memory limit too low"}
+	h.render(w, httptest.NewRequest("GET", "/incidents/1", nil), "detail-content",
+		DetailData{Report: done, SSEEnabled: true})
+	if body := w.Body.String(); strings.Contains(body, "hx-trigger") {
+		t.Errorf("a non-awaiting detail must not refresh; got a trigger in: %s", body)
 	}
 }
 
