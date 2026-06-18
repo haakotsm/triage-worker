@@ -142,6 +142,35 @@ func TestVerificationCommands_NetworkCorroboration(t *testing.T) {
 	}
 }
 
+func TestVerificationCommands_NoLogsWhenNoTarget(t *testing.T) {
+	// Pod/Namespace kind with no alert pods → no selector and no pod names, so
+	// `kubectl logs` (which needs a target) must NOT be emitted with a blank one.
+	cmds := VerificationCommands(
+		TriageReport{Classification: "CrashLoop"},
+		IncidentIdentity{Namespace: "default", Kind: "Namespace", Name: "default"},
+		EnrichmentResult{},
+		nil,
+	)
+	if c, ok := findCmd(cmds, "kubectl logs"); ok {
+		t.Errorf("should not emit a logs command with no pod target, got %q", c.Command)
+	}
+}
+
+func TestVerificationCommands_SanitizesPodLabel(t *testing.T) {
+	// A hostile/garbled alert pod label must not become a runnable shell command
+	// when copy-pasted.
+	cmds := VerificationCommands(
+		TriageReport{Classification: "CrashLoop"},
+		IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "api"},
+		EnrichmentResult{},
+		[]Alert{{Status: "firing", Labels: map[string]string{"pod": "api; rm -rf /"}}},
+	)
+	status, _ := findCmd(cmds, "kubectl get pods")
+	if strings.Contains(status.Command, ";") || strings.Contains(status.Command, "rm -rf") {
+		t.Errorf("pod label was not sanitized out of the command: %q", status.Command)
+	}
+}
+
 func TestKindToResource(t *testing.T) {
 	tests := []struct {
 		kind string

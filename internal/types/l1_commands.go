@@ -116,7 +116,11 @@ func podTargets(alerts []Alert, id IncidentIdentity) (podArg, logsArg string) {
 	var pods []string
 	seen := make(map[string]bool)
 	for _, a := range alerts {
-		if p := a.Labels["pod"]; p != "" && !seen[p] {
+		// These commands are meant to be copy-pasted into a shell, so sanitize
+		// the (untrusted) alert pod label to a valid K8s name — a hostile label
+		// like "x; rm -rf /" must not become a runnable command.
+		p := SanitizeK8sName(a.Labels["pod"])
+		if a.Labels["pod"] != "" && p != "" && p != "unknown" && !seen[p] {
 			seen[p] = true
 			pods = append(pods, p)
 		}

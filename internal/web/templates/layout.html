@@ -11,8 +11,11 @@
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/json-enc.js" defer></script>
   <script src="/static/sse.js" defer></script>
-  {{/* Alpine plugins must load before Alpine core; both defer, so document order is preserved. */}}
+  {{/* Alpine plugins and Alpine.data registrations must load before Alpine core
+       so their alpine:init listeners are registered before Alpine.start(); all
+       defer, so document order is preserved. */}}
   <script src="/static/alpine-focus.min.js" defer></script>
+  <script src="/static/alpine-components.js" defer></script>
   <script src="/static/alpine.min.js" defer></script>
   <script src="/static/init.js" defer></script>
   <style>
