@@ -972,7 +972,8 @@ func templateFuncs() template.FuncMap {
 			return (total + perPage - 1) / perPage
 		},
 		// SAFETY: all return values are hardcoded HTML, no user input.
-		"icon": renderIcon,
+		"icon":  renderIcon,
+		"asset": assetURL,
 		"blastDots": func(b string) template.HTML {
 			switch b {
 			case "cluster":

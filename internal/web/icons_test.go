@@ -15,13 +15,26 @@ func TestRenderIcon(t *testing.T) {
 		}
 	})
 
-	t.Run("custom class overrides the default size", func(t *testing.T) {
+	t.Run("base classes always applied; custom arg overrides size", func(t *testing.T) {
 		got := string(renderIcon("check", "h-8 w-8 text-success"))
-		if !strings.Contains(got, `class="h-8 w-8 text-success"`) {
-			t.Errorf("renderIcon did not apply custom class: %q", got)
+		// Base alignment classes are always present (align-middle is a real
+		// utility, unlike the old arbitrary-value alignment that never generated;
+		// note: avoid writing that bracketed class literal here — @source scans
+		// this _test.go file and would emit a dead rule for it).
+		for _, want := range []string{"inline-block", "shrink-0", "align-middle", "h-8 w-8 text-success"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("renderIcon missing %q in %q", want, got)
+			}
 		}
 		if strings.Contains(got, "h-4 w-4") {
 			t.Errorf("renderIcon should not keep the default size when overridden: %q", got)
+		}
+	})
+
+	t.Run("default size when no class arg", func(t *testing.T) {
+		got := string(renderIcon("user"))
+		if !strings.Contains(got, "h-4 w-4") || !strings.Contains(got, "align-middle") {
+			t.Errorf("renderIcon(user) should default to h-4 w-4 + align-middle: %q", got)
 		}
 	})
 

@@ -30,18 +30,24 @@ var iconPaths = map[string]template.HTML{
 }
 
 // renderIcon returns an inline SVG for the named icon, decorative by default
-// (aria-hidden). The optional argument is extra CSS classes; the default size
-// is a 1em-ish inline square that follows the surrounding text. Unknown names
-// render nothing rather than breaking the page.
+// (aria-hidden). The optional argument overrides the SIZE classes (default
+// "h-4 w-4"); the base classes (inline-block, vertical-centering, shrink-0) are
+// always applied so the icon stays aligned with adjacent text regardless of the
+// size passed. Unknown names render nothing rather than breaking the page.
+//
+// Note: alignment uses align-middle (a standard utility) rather than an
+// arbitrary value — arbitrary values in this .go file are not reliably picked
+// up by Tailwind's content scanner.
 func renderIcon(name string, class ...string) template.HTML {
 	inner, ok := iconPaths[name]
 	if !ok {
 		return ""
 	}
-	cls := "inline-block h-4 w-4 align-[-0.125em] shrink-0"
+	size := "h-4 w-4"
 	if len(class) > 0 && strings.TrimSpace(class[0]) != "" {
-		cls = class[0]
+		size = class[0]
 	}
+	cls := "inline-block shrink-0 align-middle " + size
 	return template.HTML(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ` +
 		`stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ` +
 		`class="` + template.HTMLEscapeString(cls) + `" aria-hidden="true">` + string(inner) + `</svg>`)
