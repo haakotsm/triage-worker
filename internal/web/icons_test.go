@@ -18,7 +18,9 @@ func TestRenderIcon(t *testing.T) {
 	t.Run("base classes always applied; custom arg overrides size", func(t *testing.T) {
 		got := string(renderIcon("check", "h-8 w-8 text-success"))
 		// Base alignment classes are always present (align-middle is a real
-		// utility, unlike the old arbitrary align-[-0.125em] that never generated).
+		// utility, unlike the old arbitrary-value alignment that never generated;
+		// note: avoid writing that bracketed class literal here — @source scans
+		// this _test.go file and would emit a dead rule for it).
 		for _, want := range []string{"inline-block", "shrink-0", "align-middle", "h-8 w-8 text-success"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("renderIcon missing %q in %q", want, got)
