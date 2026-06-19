@@ -76,6 +76,10 @@
   </div>
   {{end}}
 
+  {{/* Actions — primary call-to-action, kept at the top (right under the header,
+       after the low-confidence caution) so a responder can act without scrolling. */}}
+  {{template "action-bar" .}}
+
   {{/* HERO: Root Cause — the ONE elevated surface (shadow + border + severity
        accent), so it survives the dark theme and reads as primary. Confidence
        ring lives here once; blast/classification in the attached stats strip. */}}
@@ -172,11 +176,7 @@
   </section>
   {{end}}
 
-  {{/* Action Bar — buttons to act, below the diagnosis + recommendations. */}}
-  {{template "action-bar" .}}
-
-  {{/* Notes — collaboration scratchpad, right next to the actions so leaving
-       context mid-triage is one glance from acting. */}}
+  {{/* Notes — collaboration scratchpad for capturing context during triage. */}}
   {{template "incident-notes" .}}
 
   {{/* Supporting forensics — demoted, collapsed by default. Evidence auto-opens
