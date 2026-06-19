@@ -117,7 +117,7 @@
   {{/* Verify + Causal Chain, side by side — the commands confirm the findings
        while the chain shows how the failure unfolded, so they're read together.
        Two columns on lg, stacked on mobile. */}}
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+  <div class="grid grid-cols-1 {{if and .L1Commands (gt (len .Report.CausalChain) 0)}}lg:grid-cols-2{{end}} gap-4 items-start">
   {{if .L1Commands}}
   <section class="rounded-box border border-base-300 bg-base-100 p-4" x-data="commandList" aria-labelledby="verify-h">
     <div class="flex justify-between items-start gap-2">
