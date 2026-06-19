@@ -524,6 +524,39 @@ func TestActionResponse_EmitsOOBStatus(t *testing.T) {
 	}
 }
 
+func TestNotesAndTimelineSeparated(t *testing.T) {
+	h, err := NewHandler(nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewHandler() error = %v", err)
+	}
+
+	// Notes panel: add-note form + the human notes, its own swap target.
+	w := httptest.NewRecorder()
+	h.render(w, httptest.NewRequest("GET", "/", nil), "incident-notes", map[string]any{
+		"Report": &Report{ID: 1, State: "acknowledged"},
+		"Notes":  []Note{{Author: "alice@example.com", Body: "rolled back the config", CreatedAt: time.Now()}},
+	})
+	notes := w.Body.String()
+	for _, want := range []string{`id="incident-notes"`, "/api/incidents/1/notes", "Add a note", "rolled back the config"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("notes panel missing %q", want)
+		}
+	}
+
+	// Timeline: lifecycle only — no add-note form, no note POST.
+	w2 := httptest.NewRecorder()
+	h.render(w2, httptest.NewRequest("GET", "/", nil), "timeline", map[string]any{
+		"Timeline": []TimelineEntry{{Type: "created", Actor: "system", Message: "Incident created", Icon: "settings", Time: time.Now()}},
+	})
+	tl := w2.Body.String()
+	if !strings.Contains(tl, `id="incident-timeline"`) || !strings.Contains(tl, "Incident created") {
+		t.Error("timeline should render lifecycle entries")
+	}
+	if strings.Contains(tl, "Add a note") || strings.Contains(tl, "/notes") {
+		t.Errorf("timeline must no longer contain the add-note form:\n%s", tl)
+	}
+}
+
 func TestBuildTimeline(t *testing.T) {
 	h, err := NewHandler(nil, slog.Default())
 	if err != nil {
@@ -547,16 +580,12 @@ func TestBuildTimeline(t *testing.T) {
 		ResolvedAt:      &resolved,
 	}
 
-	notes := []Note{
-		{ID: 1, Author: "alice@example.com", Body: "Scaled replicas to 5", CreatedAt: now.Add(-20 * time.Minute)},
-		{ID: 2, Author: "bob@example.com", Body: "Confirmed fix", CreatedAt: now.Add(-10 * time.Minute)},
-	}
+	timeline := h.buildTimeline(report)
 
-	timeline := h.buildTimeline(report, notes)
-
-	// Should have: created, completed, acknowledged, escalated, 2 notes, resolved = 7 entries
-	if len(timeline) != 7 {
-		t.Fatalf("buildTimeline() returned %d entries, want 7", len(timeline))
+	// Lifecycle only: created, completed, acknowledged, escalated, resolved = 5.
+	// Notes are NOT merged in (they render in the separate Notes panel).
+	if len(timeline) != 5 {
+		t.Fatalf("buildTimeline() returned %d entries, want 5", len(timeline))
 	}
 
 	// First entry should be most recent (resolved)
@@ -569,15 +598,11 @@ func TestBuildTimeline(t *testing.T) {
 		t.Errorf("last entry type = %q, want 'created'", timeline[len(timeline)-1].Type)
 	}
 
-	// Check notes are included
-	noteCount := 0
+	// No note entries should appear in the lifecycle timeline.
 	for _, e := range timeline {
 		if e.Type == "note" {
-			noteCount++
+			t.Errorf("timeline should not contain note entries; got one: %q", e.Message)
 		}
-	}
-	if noteCount != 2 {
-		t.Errorf("timeline has %d notes, want 2", noteCount)
 	}
 }
 
@@ -594,7 +619,7 @@ func TestBuildTimeline_MinimalReport(t *testing.T) {
 		CreatedAt: time.Now().Add(-5 * time.Minute),
 	}
 
-	timeline := h.buildTimeline(report, nil)
+	timeline := h.buildTimeline(report)
 
 	// Should have just: created = 1 entry
 	if len(timeline) != 1 {
