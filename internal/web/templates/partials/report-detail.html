@@ -114,7 +114,10 @@
     </div>
   </div>
 
-  {{/* Verify the Diagnosis — flat panel (tier-2), confirm before acting. */}}
+  {{/* Verify + Causal Chain, side by side — the commands confirm the findings
+       while the chain shows how the failure unfolded, so they're read together.
+       Two columns on lg, stacked on mobile. */}}
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
   {{if .L1Commands}}
   <section class="rounded-box border border-base-300 bg-base-100 p-4" x-data="commandList" aria-labelledby="verify-h">
     <div class="flex justify-between items-start gap-2">
@@ -154,6 +157,17 @@
     </div>
   </section>
   {{end}}
+  {{if gt (len .Report.CausalChain) 0}}
+  <section class="rounded-box border border-base-300 bg-base-100 p-4" aria-labelledby="causal-h">
+    <h2 id="causal-h" class="font-semibold mb-3">Causal Chain ({{len .Report.CausalChain}} steps)</h2>
+    <ul class="steps steps-vertical">
+      {{range .Report.CausalChain}}
+      <li class="step step-primary">{{.}}</li>
+      {{end}}
+    </ul>
+  </section>
+  {{end}}
+  </div>
 
   {{/* Recommended Actions — promoted from a bottom accordion to a visible,
        flat panel (tier-2). This is the "what do I do" answer. */}}
@@ -179,21 +193,8 @@
   {{/* Notes — collaboration scratchpad for capturing context during triage. */}}
   {{template "incident-notes" .}}
 
-  {{/* Supporting forensics — demoted, collapsed by default. Evidence auto-opens
-       when confidence is low (the warning above tells responders to verify it). */}}
-  {{if gt (len .Report.CausalChain) 0}}
-  <details class="collapse collapse-arrow border border-base-300 bg-base-100">
-    <summary class="collapse-title"><h2 class="font-semibold inline">Causal Chain ({{len .Report.CausalChain}} steps)</h2></summary>
-    <div class="collapse-content">
-      <ul class="steps steps-vertical">
-        {{range .Report.CausalChain}}
-        <li class="step step-primary">{{.}}</li>
-        {{end}}
-      </ul>
-    </div>
-  </details>
-  {{end}}
-
+  {{/* Supporting forensics — Evidence, collapsed by default (auto-opens when
+       confidence is low). Causal Chain is shown beside Verify above. */}}
   {{if gt (len .Report.Evidence) 0}}
   <details class="collapse collapse-arrow border border-base-300 bg-base-100" {{if ltf .Report.Confidence 30.0}}open{{end}}>
     <summary class="collapse-title"><h2 class="font-semibold inline">Evidence ({{len .Report.Evidence}})</h2></summary>
