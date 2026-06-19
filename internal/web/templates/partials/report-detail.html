@@ -175,6 +175,10 @@
   {{/* Action Bar — buttons to act, below the diagnosis + recommendations. */}}
   {{template "action-bar" .}}
 
+  {{/* Notes — collaboration scratchpad, right next to the actions so leaving
+       context mid-triage is one glance from acting. */}}
+  {{template "incident-notes" .}}
+
   {{/* Supporting forensics — demoted, collapsed by default. Evidence auto-opens
        when confidence is low (the warning above tells responders to verify it). */}}
   {{if gt (len .Report.CausalChain) 0}}
@@ -218,7 +222,7 @@
   </details>
   {{end}}
 
-  {{/* Timeline & Notes — full width, bottom. */}}
+  {{/* Timeline — lifecycle audit log, full width, bottom (notes are a separate panel above). */}}
   {{template "timeline" .}}
   {{end}}{{/* end state-adaptive */}}
 </div>

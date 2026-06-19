@@ -337,7 +337,8 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Fetch notes for the timeline
+	// Fetch operator notes (rendered in the Notes panel, separate from the
+	// lifecycle timeline).
 	notes, err := h.fetchNotes(r.Context(), report.ID)
 	if err != nil {
 		h.logger.Error("fetch notes", "error", err, "report_id", report.ID)
@@ -345,7 +346,7 @@ func (h *Handler) handleDetail(w http.ResponseWriter, r *http.Request) {
 		notes = nil
 	}
 
-	timeline := h.buildTimeline(report, notes)
+	timeline := h.buildTimeline(report)
 
 	data := DetailData{
 		Report:     *report,
@@ -1518,16 +1519,16 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("note added", "incident_id", id, "note_id", noteID, "author", author)
 
-	// If htmx request, return the timeline partial for the entire incident
+	// If htmx request, return the refreshed Notes panel.
 	if isHTMX(r) {
 		report, fetchErr := h.fetchReport(r.Context(), fmt.Sprintf("%d", id))
 		if fetchErr != nil || report == nil {
-			// The note is persisted; we just can't re-render the timeline. Leave the
-			// existing DOM (and the add-note form) intact and toast instead of swapping
-			// in a static warning that would destroy the form.
-			h.logger.Error("fetch report for timeline", "error", fetchErr, "incident_id", id)
+			// The note is persisted; we just can't re-render the panel. Leave the
+			// existing DOM (and the add-note form) intact and toast instead of
+			// swapping in a static warning that would destroy the form.
+			h.logger.Error("fetch report for notes", "error", fetchErr, "incident_id", id)
 			w.Header().Set("HX-Reswap", "none")
-			if t := toastTrigger("warning", "Note saved — refresh to see it in the timeline"); t != "" {
+			if t := toastTrigger("warning", "Note saved — refresh to see it"); t != "" {
 				w.Header().Set("HX-Trigger", t)
 			}
 			w.WriteHeader(http.StatusOK)
@@ -1535,13 +1536,12 @@ func (h *Handler) handleNotes(w http.ResponseWriter, r *http.Request) {
 		}
 		notes, notesErr := h.fetchNotes(r.Context(), report.ID)
 		if notesErr != nil {
-			h.logger.Error("fetch notes for timeline", "error", notesErr, "incident_id", id)
+			h.logger.Error("fetch notes", "error", notesErr, "incident_id", id)
 		}
-		timeline := h.buildTimeline(report, notes)
 		w.Header().Set("HX-Trigger", toastTrigger("success", "Note added"))
-		h.render(w, r, "timeline", map[string]any{
-			"Timeline": timeline,
-			"Report":   report,
+		h.render(w, r, "incident-notes", map[string]any{
+			"Report": report,
+			"Notes":  notes,
 		})
 		return
 	}
@@ -1578,8 +1578,10 @@ func (h *Handler) fetchNotes(ctx context.Context, incidentID int64) ([]Note, err
 	return notes, rows.Err()
 }
 
-// buildTimeline constructs a chronological timeline from report state changes and notes.
-func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
+// buildTimeline constructs a chronological timeline of lifecycle events.
+// Operator notes are a separate concern (rendered as the Notes panel), so they
+// are intentionally NOT merged in here — this is the immutable audit log.
+func (h *Handler) buildTimeline(report *Report) []TimelineEntry {
 	var entries []TimelineEntry
 
 	// Incident created
@@ -1629,17 +1631,6 @@ func (h *Handler) buildTimeline(report *Report, notes []Note) []TimelineEntry {
 			Actor:   "system",
 			Message: "Escalated to " + report.EscalationLevel,
 			Type:    "escalated",
-		})
-	}
-
-	// Notes
-	for _, n := range notes {
-		entries = append(entries, TimelineEntry{
-			Icon:    "pencil",
-			Time:    n.CreatedAt,
-			Actor:   n.Author,
-			Message: n.Body,
-			Type:    "note",
 		})
 	}
 

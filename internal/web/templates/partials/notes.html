@@ -1,0 +1,46 @@
+{{/* Operator notes — collaboration scratchpad, separate from the immutable
+     lifecycle timeline. Its own htmx swap target (#incident-notes); the add-note
+     POST re-renders this whole panel. Rendered with .Report + .Notes. */}}
+{{define "incident-notes"}}
+<section id="incident-notes" class="rounded-box border border-base-300 bg-base-100 p-4" aria-labelledby="notes-h">
+  <h2 id="notes-h" class="font-semibold mb-2">Notes</h2>
+
+  {{if and .Report (ne .Report.State "resolved")}}
+  <form class="mb-3"
+        hx-post="/api/incidents/{{.Report.ID}}/notes"
+        hx-target="#incident-notes"
+        hx-swap="outerHTML"
+        hx-headers='{"Content-Type": "application/json"}'
+        hx-ext="json-enc"
+        hx-disabled-elt="button[type=submit]"
+        hx-indicator=".note-spinner">
+    <label for="note-body" class="text-xs font-medium">Add a note</label>
+    <div class="flex gap-2 mt-1">
+      <input id="note-body" type="text" name="body" placeholder="What did you do or observe?"
+             class="input input-sm flex-1" required
+             minlength="1" maxlength="2000" />
+      <button type="submit" class="btn btn-sm btn-primary gap-1">
+        {{icon "pencil"}} Add
+        <span class="loading loading-spinner loading-xs note-spinner htmx-indicator"></span>
+      </button>
+    </div>
+  </form>
+  {{end}}
+
+  {{if .Notes}}
+  <ul class="flex flex-col gap-2">
+    {{range .Notes}}
+    <li class="bg-base-200 rounded-lg px-3 py-2">
+      <div class="flex items-baseline gap-2 flex-wrap mb-0.5">
+        <span class="text-xs font-semibold">{{.Author}}</span>
+        <span class="text-xs text-base-content/70 font-mono">{{formatDate .CreatedAt}}</span>
+      </div>
+      <p class="text-sm break-words">{{.Body}}</p>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="text-sm text-base-content/70">No notes yet.</p>
+  {{end}}
+</section>
+{{end}}
