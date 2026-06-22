@@ -1,0 +1,22 @@
+{{define "dev-controls"}}
+<div id="dev-controls" class="card bg-base-100 border border-base-300 {{if not .WorkflowsEnabled}}border-l-4 border-l-warning{{end}}">
+  <div class="card-body py-3 flex-row items-center gap-3">
+    <div class="flex-1">
+      <h3 class="card-title text-sm">Triage workflows</h3>
+      <p class="text-xs text-base-content/60">
+        {{if .WorkflowsEnabled}}
+          Webhook is starting triage workflows — kagent runs on incoming alerts.
+        {{else}}
+          <span class="text-warning font-semibold">PAUSED</span> — incoming alerts are skipped, so no new kagent/LLM token spend. Resolves still close open incidents.
+        {{end}}
+      </p>
+    </div>
+    <form hx-post="/api/settings/workflows" hx-target="#dev-controls" hx-swap="outerHTML">
+      <input type="hidden" name="enabled" value="{{if .WorkflowsEnabled}}false{{else}}true{{end}}">
+      <button type="submit" class="btn btn-sm {{if .WorkflowsEnabled}}btn-warning btn-outline{{else}}btn-success{{end}}">
+        {{if .WorkflowsEnabled}}Pause workflows{{else}}Resume workflows{{end}}
+      </button>
+    </form>
+  </div>
+</div>
+{{end}}

@@ -10,7 +10,7 @@
           <div class="stat-figure text-error">
             {{if gt .ActiveCount 0}}
             <div class="indicator">
-              <span class="indicator-item indicator-start badge badge-error badge-xs animate-pulse"></span>
+              <span class="indicator-item indicator-start badge badge-error badge-xs motion-safe:animate-pulse"></span>
               {{icon "flame" "h-8 w-8"}}
             </div>
             {{else}}
