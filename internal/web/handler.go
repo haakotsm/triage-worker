@@ -711,9 +711,9 @@ func (h *Handler) fetchStatsCounts(ctx context.Context) (StatsData, error) {
 		return s, fmt.Errorf("stats counts: %w", err)
 	}
 
-	// Publish the per-state gauge (scraped via /metrics). fetchStats is the one
-	// place that already has every lifecycle count, and it runs on each stats
-	// refresh, so the gauge tracks reality without an extra query.
+	// Publish the per-state gauge (scraped via /metrics). fetchStatsCounts has
+	// every lifecycle count and runs on each stats refresh (the SSE hot path),
+	// so the gauge tracks reality without an extra query.
 	SetReportStateCount("processing", s.ProcessingCount)
 	SetReportStateCount("reported", s.ReportedCount)
 	SetReportStateCount("acknowledged", s.AcknowledgedCount)

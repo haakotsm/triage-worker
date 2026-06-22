@@ -3,6 +3,7 @@ package webhook
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -118,5 +119,58 @@ func TestHandler_WebhookPausedStillResolves(t *testing.T) {
 	// The resolve UPDATE must have run (and nothing for the firing alert).
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("resolves must still apply while paused: %v", err)
+	}
+}
+
+// While paused, a FAILED resolve in a mixed group must still surface as a 500
+// so Alertmanager retries — a transient DB blip must not silently drop the
+// resolution and leave the incident open. This is the alert-loss-prevention
+// path the kill-switch must preserve.
+func TestHandler_WebhookPausedResolveErrorReturns500(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &Handler{
+		logger:  newTestLogger(),
+		healthy: &atomic.Bool{},
+		db:      db,
+		gate:    fakeGate{enabled: false},
+	}
+	h.healthy.Store(true)
+
+	group := types.AlertGroup{
+		Version:  "4",
+		GroupKey: "ns/x",
+		Status:   "firing",
+		Alerts: []types.Alert{
+			{Status: "resolved", Fingerprint: "r1", Labels: map[string]string{
+				"alertname": "OldAlert", "namespace": "ns", "deployment": "app",
+			}},
+			{Status: "firing", Fingerprint: "f1", Labels: map[string]string{
+				"alertname": "NewAlert", "namespace": "ns", "deployment": "app",
+			}},
+		},
+	}
+	rid := types.DeriveIdentity(group.Alerts[0].Labels)
+	expectStemLock(mock, rid.WorkflowID())
+	mock.ExpectExec(regexp.QuoteMeta(resolvedUpdateSQL)).
+		WithArgs(rid.Namespace, rid.Kind, rid.Name, rid.AlertName).
+		WillReturnError(fmt.Errorf("connection refused"))
+	mock.ExpectRollback()
+
+	body, _ := json.Marshal(group)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (resolve error must surface while paused); body=%s", w.Code, w.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }
