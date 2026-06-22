@@ -275,6 +275,16 @@ func MigrateSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_incident_notes_incident_created
 			ON triage.incident_notes (incident_id, created_at DESC);
 
+		-- Runtime-toggleable operational settings (e.g. the dashboard
+		-- kill-switch that pauses triage-workflow starts during development).
+		-- Absence of a row means "default"; the application supplies the
+		-- default (workflows enabled), so no seed row is required.
+		CREATE TABLE IF NOT EXISTS triage.settings (
+			key        TEXT PRIMARY KEY,
+			value      TEXT NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
 		-- Drop legacy incidents table if it exists (merged into reports).
 		DROP TABLE IF EXISTS triage.incidents;
 		DROP FUNCTION IF EXISTS triage.notify_incident_change() CASCADE;

@@ -18,6 +18,7 @@ import (
 	"github.com/haakotsm/triage-worker/internal/activity"
 	triageapi "github.com/haakotsm/triage-worker/internal/api"
 	"github.com/haakotsm/triage-worker/internal/auth"
+	"github.com/haakotsm/triage-worker/internal/settings"
 	"github.com/haakotsm/triage-worker/internal/web"
 	"github.com/haakotsm/triage-worker/internal/webhook"
 	"github.com/haakotsm/triage-worker/internal/workflow"
@@ -141,6 +142,17 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	w.RegisterActivity(reportActivity)
 	w.RegisterActivity(k8sActivity)
 
+	// --- Runtime settings (dashboard kill-switch) ---
+	// Backed by Postgres so a "pause workflows" toggle survives pod restarts /
+	// image redeploys; primed into an atomic cache the webhook reads per alert.
+	var settingsStore *settings.Store
+	if db != nil {
+		settingsStore = settings.New(db, logger)
+		if err := settingsStore.Load(ctx); err != nil {
+			logger.Warn("load settings — using defaults (workflows enabled)", "error", err)
+		}
+	}
+
 	// --- HTTP Server (webhook + health + API) ---
 	var apiHandler http.Handler
 	var webHandler http.Handler
@@ -152,6 +164,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("create web handler: %w", err)
 		}
+		wh.SetSettings(settingsStore)
 
 		// SSE broker for realtime updates (requires DATABASE_URL for PG LISTEN).
 		sseBroker := web.NewSSEBroker(db, databaseURL, logger)
@@ -177,6 +190,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		logger.Info("web dashboard enabled", "dev_mode", devMode)
 	}
 	handler := webhook.NewHandler(tc, taskQueue, logger, webhookSecret, apiHandler, webHandler, db)
+	if settingsStore != nil {
+		handler.SetWorkflowGate(settingsStore)
+	}
 
 	// /metrics is served unauthenticated (Prometheus scrape) and outside the
 	// instrumented web handler so scrapes don't inflate request metrics.

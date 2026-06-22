@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+
+	"github.com/haakotsm/triage-worker/internal/settings"
 )
 
 // Report mirrors api.Report for template rendering.
@@ -117,6 +119,9 @@ type DashboardData struct {
 	Sort       string
 	Dir        string
 	SSEEnabled bool
+
+	// WorkflowsEnabled reflects the triage-workflow kill-switch (dev control).
+	WorkflowsEnabled bool
 }
 
 // Note represents an operator note attached to an incident.
@@ -155,6 +160,19 @@ type Handler struct {
 	logger   *slog.Logger
 	sse      *SSEBroker      // optional: nil if SSE not configured
 	retriage RetrieveStarter // optional: starts re-triage workflows
+	settings *settings.Store // optional: runtime kill-switch state
+}
+
+// SetSettings attaches the runtime settings store (powers the dashboard
+// triage-workflow kill-switch).
+func (h *Handler) SetSettings(s *settings.Store) {
+	h.settings = s
+}
+
+// workflowsEnabled reports the current kill-switch state for templates,
+// defaulting to enabled when no settings store is wired (fail-open).
+func (h *Handler) workflowsEnabled() bool {
+	return h.settings == nil || h.settings.WorkflowsEnabled()
 }
 
 // RetrieveStarter starts a new triage workflow for re-analysis.
@@ -246,6 +264,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleNotes(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && strings.HasSuffix(r.URL.Path, "/retriage"):
 		h.handleRetriage(w, r)
+	case r.URL.Path == "/api/settings/workflows":
+		h.handleWorkflowsToggle(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/") && strings.HasSuffix(r.URL.Path, "/resolve"):
 		h.handleResolve(w, r)
 	case strings.HasPrefix(r.URL.Path, "/reports/"):
@@ -294,7 +314,12 @@ func (h *Handler) handlePartialReports(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePartialStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.fetchStats(r.Context())
+	// The stats-panel (KPI cards + severity gauges) only needs the single
+	// count query. The classification breakdown and 14-day sparkline that the
+	// full fetchStats also runs are rendered by chart-sidebar, which is NOT
+	// SSE-refreshed — so fetching them here would run two extra queries (one a
+	// 14-day generate_series join) on every SSE event for data we discard.
+	stats, err := h.fetchStatsCounts(r.Context())
 	if err != nil {
 		h.logger.Error("fetch stats", "error", err)
 		h.renderError(w, r, "Failed to load stats")
@@ -492,6 +517,33 @@ func (h *Handler) respondActionBar(w http.ResponseWriter, r *http.Request, id in
 	h.render(w, r, "action-response", map[string]any{"Report": report})
 }
 
+// handleWorkflowsToggle flips the triage-workflow kill-switch from the
+// dashboard. POST enabled=true|false. Re-renders the dev-controls fragment so
+// the button reflects the new state, plus a toast.
+func (h *Handler) handleWorkflowsToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.hxError(w, r, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.settings == nil {
+		h.hxError(w, r, http.StatusServiceUnavailable, "settings store unavailable")
+		return
+	}
+	enabled := r.FormValue("enabled") == "true"
+	if err := h.settings.SetWorkflowsEnabled(r.Context(), enabled); err != nil {
+		h.logger.Error("toggle workflows", "error", err, "enabled", enabled)
+		h.hxError(w, r, http.StatusInternalServerError, "failed to update setting")
+		return
+	}
+	h.logger.Info("triage workflows toggled via dashboard", "enabled", enabled)
+	msg := "Triage workflows resumed"
+	if !enabled {
+		msg = "Triage workflows paused — no new kagent runs"
+	}
+	w.Header().Set("HX-Trigger", toastTrigger("success", msg))
+	h.render(w, r, "dev-controls", map[string]any{"WorkflowsEnabled": enabled})
+}
+
 // fetchDashboardData queries reports for the dashboard.
 func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 	data, err := h.fetchReportTableData(r)
@@ -513,6 +565,7 @@ func (h *Handler) fetchDashboardData(r *http.Request) (DashboardData, error) {
 
 	data.Stats = stats
 	data.Incidents = incidents
+	data.WorkflowsEnabled = h.workflowsEnabled()
 	return data, nil
 }
 
@@ -622,8 +675,12 @@ func (h *Handler) fetchReportTableData(r *http.Request) (DashboardData, error) {
 	}, nil
 }
 
-// fetchStats runs aggregate queries for KPI cards and charts.
-func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
+// fetchStatsCounts runs ONLY the single aggregate count query that backs the
+// KPI cards, severity gauges, blast-radius counts, MTTR and resolution rate.
+// This is the hot path: the dashboard's #stats-panel re-fetches it on every
+// SSE event, so it must stay to one query and must not pull in the heavier
+// classification/sparkline queries (see fetchStats).
+func (h *Handler) fetchStatsCounts(ctx context.Context) (StatsData, error) {
 	var s StatsData
 
 	// Single query for all counts using PostgreSQL FILTER.
@@ -665,6 +722,20 @@ func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
 	s.MTTRDisplay = formatDuration(s.MTTRSeconds)
 	if s.TotalCount > 0 {
 		s.ResolutionRate = float64(s.ResolvedCount) / float64(s.TotalCount) * 100
+	}
+
+	return s, nil
+}
+
+// fetchStats returns the full stats set: the counts from fetchStatsCounts plus
+// the classification breakdown and 14-day sparkline that chart-sidebar renders.
+// Only the initial dashboard render needs these; SSE-driven stats-panel
+// refreshes call fetchStatsCounts instead to avoid running the two extra
+// queries (one a 14-day generate_series join) on every event.
+func (h *Handler) fetchStats(ctx context.Context) (StatsData, error) {
+	s, err := h.fetchStatsCounts(ctx)
+	if err != nil {
+		return s, err
 	}
 
 	// Classification breakdown (active/reported only).

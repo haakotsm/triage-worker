@@ -28,6 +28,15 @@ var ErrSkipFlap = stderrors.New("alert skipped: within flap window after recent 
 
 const maxBodySize = 1 << 20 // 1 MB
 
+// WorkflowGate decides whether the webhook may start new triage workflows. A
+// nil gate (or one returning true) means workflows run normally; a gate
+// returning false pauses new workflow starts — the development-time control for
+// kagent/LLM token spend. Resolved alerts are still processed while paused so
+// open incidents close cleanly.
+type WorkflowGate interface {
+	WorkflowsEnabled() bool
+}
+
 // Handler handles Alertmanager webhook requests and starts/signals Temporal workflows.
 type Handler struct {
 	temporalClient client.Client
@@ -38,6 +47,13 @@ type Handler struct {
 	apiHandler     http.Handler
 	webHandler     http.Handler
 	db             *sql.DB
+	gate           WorkflowGate
+}
+
+// SetWorkflowGate attaches the runtime kill-switch consulted before starting
+// workflows. Leaving it unset is treated as always-enabled.
+func (h *Handler) SetWorkflowGate(g WorkflowGate) {
+	h.gate = g
 }
 
 // NewHandler creates a new webhook handler.
@@ -76,7 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleHealthz(w, r)
 	case r.URL.Path == "/readyz":
 		h.handleReadyz(w, r)
-	case strings.HasPrefix(r.URL.Path, "/api/incidents/") && h.webHandler != nil:
+	case (strings.HasPrefix(r.URL.Path, "/api/incidents/") || strings.HasPrefix(r.URL.Path, "/api/settings/")) && h.webHandler != nil:
 		h.webHandler.ServeHTTP(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/") && h.apiHandler != nil:
 		h.apiHandler.ServeHTTP(w, r)
@@ -165,6 +181,34 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		if errored > 0 {
 			errors = append(errors, fmt.Sprintf("resolve failed for %d identities", errored))
 		}
+	}
+
+	// Kill-switch: when triage workflows are paused from the dashboard, the
+	// resolves above still apply (so open incidents close and the DB stays
+	// consistent), but we start no new triage workflows — and crucially do not
+	// mint preliminary 'processing' rows via resolveWorkflowID. This is the
+	// development-time control for kagent/LLM token spend.
+	if h.gate != nil && !h.gate.WorkflowsEnabled() {
+		if len(errors) > 0 {
+			// A resolve in this mixed group failed — surface it so Alertmanager
+			// retries rather than silently dropping the resolution.
+			http.Error(w, fmt.Sprintf("partial failure: %v", errors), http.StatusInternalServerError)
+			return
+		}
+		h.logger.Info("triage workflows paused — skipping firing alerts (kill-switch active)",
+			"group_key", alertGroup.GroupKey,
+			"firing", len(firing),
+		)
+		w.WriteHeader(http.StatusOK)
+		resp := map[string]interface{}{
+			"status":  "paused",
+			"skipped": len(firing),
+			"alerts":  len(firing),
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			h.logger.Warn("failed to write response", "error", err)
+		}
+		return
 	}
 
 	// Group firing alerts by identity stem. The stem is shared across all
