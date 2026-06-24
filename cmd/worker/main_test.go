@@ -2,6 +2,9 @@ package main
 
 import (
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -50,4 +53,42 @@ func TestTemporalLogger(t *testing.T) {
 	tl.Info("test info", "key", "val")
 	tl.Warn("test warn", "key", "val")
 	tl.Error("test error", "key", "val")
+}
+
+// TestMetricsMuxServesMetrics verifies the dedicated metrics router exposes
+// Prometheus metrics on /metrics (the endpoint scraped on METRICS_ADDR:9090).
+func TestMetricsMuxServesMetrics(t *testing.T) {
+	srv := httptest.NewServer(newMetricsMux())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want a Prometheus text exposition type", ct)
+	}
+}
+
+// TestMetricsMuxDoesNotServeDashboard verifies the metrics router only exposes
+// /metrics; any other path (i.e. dashboard routes) is not served here. This
+// guards the separation that keeps /metrics off the public dashboard ingress.
+func TestMetricsMuxDoesNotServeDashboard(t *testing.T) {
+	srv := httptest.NewServer(newMetricsMux())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET / on metrics mux status = %d, want 404", resp.StatusCode)
+	}
 }

@@ -58,6 +58,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	databaseURL := getEnv("DATABASE_URL", "")
 	webhookSecret := getEnv("WEBHOOK_SECRET", "")
 	listenAddr := getEnv("LISTEN_ADDR", ":8080")
+	metricsAddr := getEnv("METRICS_ADDR", ":9090")
 
 	fullAgentURL := fmt.Sprintf("%s/api/a2a/%s/%s", agentURL, agentNS, agentName)
 
@@ -194,10 +195,11 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		handler.SetWorkflowGate(settingsStore)
 	}
 
-	// /metrics is served unauthenticated (Prometheus scrape) and outside the
+	// The dashboard/webhook server listens on listenAddr (public via ingress).
+	// Prometheus /metrics is served on a SEPARATE listener (metricsAddr) so it
+	// is never exposed through the public dashboard ingress, and outside the
 	// instrumented web handler so scrapes don't inflate request metrics.
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", web.MetricsHandler())
 	mux.Handle("/", handler)
 
 	srv := &http.Server{
@@ -208,8 +210,16 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	metricsSrv := &http.Server{
+		Addr:         metricsAddr,
+		Handler:      newMetricsMux(),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	// --- Start ---
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 
 	go func() {
 		logger.Info("starting temporal worker", "task_queue", taskQueue)
@@ -220,6 +230,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		logger.Info("starting HTTP server", "addr", listenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- fmt.Errorf("http server: %w", err)
+		}
+	}()
+
+	go func() {
+		logger.Info("starting metrics server", "addr", metricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("metrics server: %w", err)
 		}
 	}()
 
@@ -260,10 +277,22 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "error", err)
 	}
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("metrics shutdown error", "error", err)
+	}
 
 	w.Stop()
 	logger.Info("shutdown complete")
 	return nil
+}
+
+// newMetricsMux builds the dedicated Prometheus metrics router served on
+// METRICS_ADDR (default :9090), kept separate from the public dashboard server
+// so /metrics is never reachable through the dashboard ingress.
+func newMetricsMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", web.MetricsHandler())
+	return mux
 }
 
 func getEnv(key, fallback string) string {
