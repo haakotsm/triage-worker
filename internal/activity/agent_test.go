@@ -22,7 +22,7 @@ func TestReadJSONRPCResponse_Artifacts(t *testing.T) {
 		}
 	}`
 
-	text, err := readJSONRPCResponse(strings.NewReader(body))
+	text, _, err := readJSONRPCResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("readJSONRPCResponse() error = %v", err)
 	}
@@ -45,7 +45,7 @@ func TestReadJSONRPCResponse_MessageFallback(t *testing.T) {
 		}
 	}`
 
-	text, err := readJSONRPCResponse(strings.NewReader(body))
+	text, _, err := readJSONRPCResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("readJSONRPCResponse() error = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestReadJSONRPCResponse_Error(t *testing.T) {
 		"error": {"code": -32600, "message": "invalid request"}
 	}`
 
-	_, err := readJSONRPCResponse(strings.NewReader(body))
+	_, _, err := readJSONRPCResponse(strings.NewReader(body))
 	if err == nil {
 		t.Fatal("expected error for JSON-RPC error response")
 	}
@@ -73,7 +73,7 @@ func TestReadJSONRPCResponse_Error(t *testing.T) {
 func TestReadJSONRPCResponse_EmptyResult(t *testing.T) {
 	body := `{"jsonrpc":"2.0","id":"1","result":{}}`
 
-	_, err := readJSONRPCResponse(strings.NewReader(body))
+	_, _, err := readJSONRPCResponse(strings.NewReader(body))
 	if err == nil {
 		t.Fatal("expected error for empty result")
 	}
@@ -82,7 +82,7 @@ func TestReadJSONRPCResponse_EmptyResult(t *testing.T) {
 func TestReadJSONRPCResponse_NullMessage(t *testing.T) {
 	body := `{"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"}}}`
 
-	_, err := readJSONRPCResponse(strings.NewReader(body))
+	_, _, err := readJSONRPCResponse(strings.NewReader(body))
 	if err == nil {
 		t.Fatal("expected error for null message")
 	}
@@ -91,7 +91,7 @@ func TestReadJSONRPCResponse_NullMessage(t *testing.T) {
 func TestReadJSONRPCResponse_EmptyParts(t *testing.T) {
 	body := `{"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"},"message":{"role":"agent","parts":[]}}}`
 
-	_, err := readJSONRPCResponse(strings.NewReader(body))
+	_, _, err := readJSONRPCResponse(strings.NewReader(body))
 	if err == nil {
 		t.Fatal("expected error for empty parts")
 	}
@@ -104,7 +104,7 @@ data: {"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"},"artifa
 
 `
 
-	text, err := readSSEResponse(strings.NewReader(body))
+	text, _, err := readSSEResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("readSSEResponse() error = %v", err)
 	}
@@ -116,7 +116,7 @@ data: {"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"},"artifa
 func TestReadSSEResponse_PlainText(t *testing.T) {
 	body := "data: plain text response\n\n"
 
-	text, err := readSSEResponse(strings.NewReader(body))
+	text, _, err := readSSEResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("readSSEResponse() error = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestReadSSEResponse_PlainText(t *testing.T) {
 func TestReadSSEResponse_Empty(t *testing.T) {
 	body := ""
 
-	_, err := readSSEResponse(strings.NewReader(body))
+	_, _, err := readSSEResponse(strings.NewReader(body))
 	if err == nil {
 		t.Fatal("expected error for empty SSE stream")
 	}
@@ -298,7 +298,7 @@ func TestBuildAgentPrompt_LogLineTruncation(t *testing.T) {
 
 // Ensure readJSONRPCResponse handles invalid JSON
 func TestReadJSONRPCResponse_InvalidJSON(t *testing.T) {
-	_, err := readJSONRPCResponse(strings.NewReader("not json"))
+	_, _, err := readJSONRPCResponse(strings.NewReader("not json"))
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -308,7 +308,7 @@ func TestReadJSONRPCResponse_InvalidJSON(t *testing.T) {
 func TestReadSSEResponse_MultipleDataLines(t *testing.T) {
 	body := "data: first\ndata: second\ndata: third\n\n"
 
-	text, err := readSSEResponse(strings.NewReader(body))
+	text, _, err := readSSEResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("readSSEResponse() error = %v", err)
 	}
@@ -321,7 +321,7 @@ func TestReadSSEResponse_MultipleDataLines(t *testing.T) {
 func TestReadSSEResponse_NonDataLines(t *testing.T) {
 	body := ": comment\nevent: update\ndata: the-data\n\n"
 
-	text, err := readSSEResponse(strings.NewReader(body))
+	text, _, err := readSSEResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("readSSEResponse() error = %v", err)
 	}
@@ -333,7 +333,7 @@ func TestReadSSEResponse_NonDataLines(t *testing.T) {
 // Interface compliance — ensure readJSONRPCResponse accepts io.Reader
 func TestReadJSONRPCResponse_ReaderInterface(t *testing.T) {
 	var r io.Reader = strings.NewReader(`{"jsonrpc":"2.0","id":"1","result":{"status":{"state":"completed"},"artifacts":[{"artifactId":"x","parts":[{"kind":"text","text":"ok"}]}]}}`)
-	text, err := readJSONRPCResponse(r)
+	text, _, err := readJSONRPCResponse(r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,8 +366,8 @@ func TestStripMarkdownJSON(t *testing.T) {
 }
 
 func TestParseTriageReport_FlexibleCausalChain(t *testing.T) {
-// LLM returns causal_chain as array of objects instead of strings
-input := `{
+	// LLM returns causal_chain as array of objects instead of strings
+	input := `{
 "classification": "Config",
 "severity": "warning",
 "root_cause": "missing config",
@@ -378,20 +378,20 @@ input := `{
 "confidence": 0.7,
 "escalation_needed": false
 }`
-report, err := parseTriageReport(input)
-if err != nil {
-t.Fatalf("parseTriageReport failed: %v", err)
-}
-if report.Classification != "Config" {
-t.Errorf("classification = %q, want Config", report.Classification)
-}
-if len(report.CausalChain) != 2 {
-t.Errorf("causal_chain length = %d, want 2", len(report.CausalChain))
-}
+	report, err := parseTriageReport(input)
+	if err != nil {
+		t.Fatalf("parseTriageReport failed: %v", err)
+	}
+	if report.Classification != "Config" {
+		t.Errorf("classification = %q, want Config", report.Classification)
+	}
+	if len(report.CausalChain) != 2 {
+		t.Errorf("causal_chain length = %d, want 2", len(report.CausalChain))
+	}
 }
 
 func TestParseTriageReport_StrictWorks(t *testing.T) {
-input := `{
+	input := `{
 "classification": "OOM",
 "severity": "critical",
 "root_cause": "memory leak",
@@ -402,14 +402,14 @@ input := `{
 "confidence": 0.9,
 "escalation_needed": true
 }`
-report, err := parseTriageReport(input)
-if err != nil {
-t.Fatalf("parseTriageReport failed: %v", err)
-}
-if report.Classification != "OOM" {
-t.Errorf("classification = %q, want OOM", report.Classification)
-}
-if len(report.CausalChain) != 3 {
-t.Errorf("causal_chain length = %d, want 3", len(report.CausalChain))
-}
+	report, err := parseTriageReport(input)
+	if err != nil {
+		t.Fatalf("parseTriageReport failed: %v", err)
+	}
+	if report.Classification != "OOM" {
+		t.Errorf("classification = %q, want OOM", report.Classification)
+	}
+	if len(report.CausalChain) != 3 {
+		t.Errorf("causal_chain length = %d, want 3", len(report.CausalChain))
+	}
 }

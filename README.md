@@ -67,6 +67,11 @@ served on the same endpoint:
   outcome and latency, per-source (Prometheus/Loki/Kubernetes) enrichment
   health, and persisted report counts by severity/classification. All label
   values are normalized to bounded sets so cardinality stays fixed.
+  Per-request LLM token usage is also captured here: `triage_agent_tokens_total`
+  (`type=prompt|completion`), `triage_agent_tokens_per_request`, and the
+  watchdog `triage_agent_token_usage_missing_total`. Usage is parsed from the
+  A2A task metadata (`kagent_usage_metadata`, Google ADK / Gemini shape), with
+  OpenAI- and Ollama-shaped fallbacks.
 - **Temporal SDK metrics** (`temporal_*`) — the Go SDK's built-in client and
   worker metrics: workflow/activity execution latency and failures, task-queue
   schedule-to-start latency, poll success, and sticky-cache health. Wired via
