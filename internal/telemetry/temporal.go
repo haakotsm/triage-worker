@@ -6,6 +6,7 @@ package telemetry
 
 import (
 	"io"
+	"log/slog"
 	"time"
 
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -32,7 +33,16 @@ const reportInterval = time.Second
 // The returned io.Closer stops the underlying tally scope and must be closed on
 // shutdown to flush and release its background reporter goroutine.
 func NewTemporalMetricsHandler(registerer prom.Registerer) (client.MetricsHandler, io.Closer) {
-	reporter := tallyprom.NewReporter(tallyprom.Options{Registerer: registerer})
+	reporter := tallyprom.NewReporter(tallyprom.Options{
+		Registerer: registerer,
+		// Default behaviour panics the process on a registration failure
+		// (e.g. an AlreadyRegisteredError if a second handler is ever built
+		// against the same registry). Log and continue instead so a metrics
+		// wiring mistake can never take down the worker.
+		OnRegisterError: func(err error) {
+			slog.Default().Warn("temporal metric registration failed", "error", err)
+		},
+	})
 
 	scope, closer := tally.NewRootScope(tally.ScopeOptions{
 		CachedReporter:  reporter,

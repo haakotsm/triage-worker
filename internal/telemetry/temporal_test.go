@@ -60,3 +60,27 @@ func TestNewTemporalMetricsHandlerWithTags(t *testing.T) {
 	}
 	tagged.Gauge("test_worker_task_slots_available").Update(5)
 }
+
+// TestNewTemporalMetricsHandlerDuplicateRegistryDoesNotPanic ensures that
+// building a second handler against the same registry and re-emitting a metric
+// degrades gracefully (logs) instead of panicking — tally's default register
+// error behaviour is to panic, which would take down the worker.
+func TestNewTemporalMetricsHandlerDuplicateRegistryDoesNotPanic(t *testing.T) {
+	reg := prometheus.NewRegistry()
+
+	h1, c1 := NewTemporalMetricsHandler(reg)
+	defer func() { _ = c1.Close() }()
+	h1.Counter("test_dup_metric").Inc(1)
+	_ = c1.Close() // flush h1's registration into reg
+
+	h2, c2 := NewTemporalMetricsHandler(reg)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("second handler panicked on duplicate registration: %v", r)
+		}
+	}()
+	h2.Counter("test_dup_metric").Inc(1)
+	if err := c2.Close(); err != nil {
+		t.Fatalf("c2.Close: %v", err)
+	}
+}
