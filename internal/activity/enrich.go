@@ -48,6 +48,12 @@ func (a *Activities) queryPrometheus(ctx context.Context, identity types.Inciden
 	result := types.PrometheusResult{Available: true}
 	now := time.Now()
 
+	// Track query failures so a Prometheus outage isn't misreported as a clean,
+	// empty result. If every query errors we mark the source unavailable, which
+	// the QueryPrometheus wrapper records as an enrichment error.
+	queryErrors := 0
+	var lastErr error
+
 	// Query restart rate over last 5 minutes
 	restartQuery := fmt.Sprintf(
 		`increase(kube_pod_container_status_restarts_total{namespace="%s"}[5m])`,
@@ -64,7 +70,10 @@ func (a *Activities) queryPrometheus(ctx context.Context, identity types.Inciden
 	}
 
 	val, _, err := api.Query(ctx, restartQuery, now)
-	if err == nil && val.Type() == model.ValVector {
+	if err != nil {
+		queryErrors++
+		lastErr = err
+	} else if val.Type() == model.ValVector {
 		vector := val.(model.Vector)
 		for _, sample := range vector {
 			result.RestartRate += float64(sample.Value)
@@ -77,7 +86,10 @@ func (a *Activities) queryPrometheus(ctx context.Context, identity types.Inciden
 		identity.Namespace, identity.Namespace,
 	)
 	val, _, err = api.Query(ctx, memQuery, now)
-	if err == nil && val.Type() == model.ValVector {
+	if err != nil {
+		queryErrors++
+		lastErr = err
+	} else if val.Type() == model.ValVector {
 		vector := val.(model.Vector)
 		if len(vector) > 0 {
 			result.MemoryPct = float64(vector[0].Value)
@@ -90,10 +102,23 @@ func (a *Activities) queryPrometheus(ctx context.Context, identity types.Inciden
 		identity.Namespace,
 	)
 	val, _, err = api.Query(ctx, cpuQuery, now)
-	if err == nil && val.Type() == model.ValVector {
+	if err != nil {
+		queryErrors++
+		lastErr = err
+	} else if val.Type() == model.ValVector {
 		vector := val.(model.Vector)
 		if len(vector) > 0 {
 			result.CPUUsage = float64(vector[0].Value)
+		}
+	}
+
+	// All queries failed → Prometheus is effectively unreachable. Degrade
+	// gracefully (still return a nil error so the workflow continues) but flag
+	// the source as unavailable for both downstream logic and the metric.
+	if queryErrors == 3 {
+		result.Available = false
+		if lastErr != nil {
+			result.Error = lastErr.Error()
 		}
 	}
 

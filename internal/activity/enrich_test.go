@@ -77,6 +77,61 @@ func TestQueryLoki_ParsesStreamsResponse(t *testing.T) {
 	}
 }
 
+func TestQueryPrometheus_AllQueriesFailUnavailable(t *testing.T) {
+	// Every Prometheus query returns 500 → the source is effectively
+	// unreachable and must be reported as unavailable, not a clean empty result.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	a := &Activities{
+		PrometheusURL: server.URL,
+		HTTPClient:    server.Client(),
+	}
+
+	identity := types.IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "api"}
+	result, err := a.QueryPrometheus(context.Background(), identity, nil)
+	if err != nil {
+		t.Fatalf("QueryPrometheus() error = %v", err)
+	}
+	if result.Available {
+		t.Error("expected Available=false when all queries fail")
+	}
+	if result.Error == "" {
+		t.Error("expected Error to be populated when all queries fail")
+	}
+}
+
+func TestQueryPrometheus_SuccessAvailable(t *testing.T) {
+	// A valid empty-vector response for every query → Prometheus is reachable,
+	// so the result is available even though no samples came back.
+	body, _ := json.Marshal(map[string]any{
+		"status": "success",
+		"data":   map[string]any{"resultType": "vector", "result": []any{}},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	a := &Activities{
+		PrometheusURL: server.URL,
+		HTTPClient:    server.Client(),
+	}
+
+	identity := types.IncidentIdentity{Namespace: "default", Kind: "Deployment", Name: "api"}
+	result, err := a.QueryPrometheus(context.Background(), identity, nil)
+	if err != nil {
+		t.Fatalf("QueryPrometheus() error = %v", err)
+	}
+	if !result.Available {
+		t.Errorf("expected Available=true on reachable Prometheus, got error: %s", result.Error)
+	}
+}
+
 func TestQueryLoki_HandlesErrorStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
