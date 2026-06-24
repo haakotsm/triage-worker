@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/haakotsm/triage-worker/internal/metrics"
 	"github.com/haakotsm/triage-worker/internal/types"
 )
 
@@ -71,7 +72,7 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 		WHERE triage.reports.state != 'resolved'
 	`
 
-	_, err = r.DB.ExecContext(ctx, query,
+	res, err := r.DB.ExecContext(ctx, query,
 		result.WorkflowID,
 		result.Identity.Namespace,
 		result.Identity.Name,
@@ -94,6 +95,16 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 	if err != nil {
 		return fmt.Errorf("upsert report: %w", err)
 	}
+
+	// Only count a classification when a row was actually written. The UPSERT is
+	// a no-op when the incident is already 'resolved' (the ON CONFLICT WHERE
+	// guard), and counting those would overstate persisted reports. If the
+	// driver can't report RowsAffected we record optimistically.
+	if rows, raErr := res.RowsAffected(); raErr == nil && rows == 0 {
+		return nil
+	}
+
+	metrics.RecordReportClassification(result.Severity, result.Classification)
 
 	return nil
 }

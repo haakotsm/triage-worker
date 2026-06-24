@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.temporal.io/sdk/temporal"
 
 	"github.com/haakotsm/triage-worker/internal/auth"
+	"github.com/haakotsm/triage-worker/internal/metrics"
 	"github.com/haakotsm/triage-worker/internal/types"
 )
 
@@ -36,7 +38,7 @@ type a2aMessageSend struct {
 }
 
 type a2aMessage struct {
-	Role  string   `json:"role"`
+	Role  string    `json:"role"`
 	Parts []a2aPart `json:"parts"`
 }
 
@@ -47,10 +49,10 @@ type a2aPart struct {
 
 // a2aResponse is the JSON-RPC response (simplified for non-streaming).
 type a2aResponse struct {
-	JSONRPC string       `json:"jsonrpc"`
-	ID      string       `json:"id"`
-	Result  *a2aResult   `json:"result,omitempty"`
-	Error   *a2aError    `json:"error,omitempty"`
+	JSONRPC string     `json:"jsonrpc"`
+	ID      string     `json:"id"`
+	Result  *a2aResult `json:"result,omitempty"`
+	Error   *a2aError  `json:"error,omitempty"`
 }
 
 type a2aTaskStatus struct {
@@ -75,7 +77,19 @@ type a2aError struct {
 }
 
 // InvokeTriageAgent calls the error-triage-agent with correlated alerts and enrichment context.
-func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Alert, enrichment types.EnrichmentResult) (types.TriageReport, error) {
+func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Alert, enrichment types.EnrichmentResult) (report types.TriageReport, err error) {
+	// Record invocation outcome + latency on every return path. The fallback
+	// path (unstructured LLM output) returns a nil error and so counts as a
+	// success — the agent did respond, just imperfectly.
+	start := time.Now()
+	defer func() {
+		result := metrics.OutcomeSuccess
+		if err != nil {
+			result = metrics.OutcomeError
+		}
+		metrics.RecordAgentInvocation(result, time.Since(start))
+	}()
+
 	// Build prompt from alerts + enrichment
 	prompt := buildAgentPrompt(alerts, enrichment)
 
@@ -152,7 +166,7 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 	agentText = stripMarkdownJSON(agentText)
 
 	// Parse agent response with flexible unmarshaling (LLM output is non-deterministic)
-	report, err := parseTriageReport(agentText)
+	report, err = parseTriageReport(agentText)
 	if err != nil {
 		// Fallback: small models sometimes return plain prose instead of JSON.
 		// Create a minimal report with the raw text rather than failing entirely.

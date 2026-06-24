@@ -17,6 +17,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 
+	"github.com/haakotsm/triage-worker/internal/metrics"
 	"github.com/haakotsm/triage-worker/internal/types"
 	"github.com/haakotsm/triage-worker/internal/workflow"
 )
@@ -106,7 +107,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	// result is recorded (with the total handling latency) on every return path
+	// via the deferred recorder. It defaults to "error"; each terminal path
+	// overwrites it with the outcome it actually produced.
+	start := time.Now()
+	result := metrics.ResultError
+	defer func() { metrics.RecordWebhookRequest(result, time.Since(start)) }()
+
 	if r.Method != http.MethodPost {
+		result = metrics.ResultRejected
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -116,6 +125,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
 		if auth == token || subtle.ConstantTimeCompare([]byte(token), []byte(h.webhookSecret)) != 1 {
+			result = metrics.ResultRejected
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -130,6 +140,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Validate Content-Type
 	ct := r.Header.Get("Content-Type")
 	if !strings.HasPrefix(ct, "application/json") {
+		result = metrics.ResultRejected
 		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -137,12 +148,14 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Read and validate body
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
+		result = metrics.ResultRejected
 		http.Error(w, "read body failed", http.StatusBadRequest)
 		return
 	}
 
 	var alertGroup types.AlertGroup
 	if err := json.Unmarshal(body, &alertGroup); err != nil {
+		result = metrics.ResultRejected
 		h.logger.Error("invalid alertmanager payload", "error", err)
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
@@ -165,6 +178,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			"group_key", alertGroup.GroupKey,
 			"resolved_count", updated,
 		)
+		result = metrics.ResultResolved
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"status":"resolved","reports_updated":%d}`, updated)
 		return
@@ -199,6 +213,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			"group_key", alertGroup.GroupKey,
 			"firing", len(firing),
 		)
+		result = metrics.ResultPaused
 		w.WriteHeader(http.StatusOK)
 		resp := map[string]interface{}{
 			"status":  "paused",
@@ -240,6 +255,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 				"workload", identity.Name,
 			)
 			flapsSkipped++
+			metrics.RecordWebhookDecision(metrics.DecisionFlapSkipped)
 			continue
 		case err != nil:
 			h.logger.Error("resolve workflow id failed",
@@ -247,6 +263,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 				"error", err,
 			)
 			errors = append(errors, fmt.Sprintf("%s: %v", stem, err))
+			metrics.RecordWebhookDecision(metrics.DecisionResolveError)
 			continue
 		}
 
@@ -256,9 +273,11 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 				"error", err,
 			)
 			errors = append(errors, fmt.Sprintf("%s: %v", wfID, err))
+			metrics.RecordWebhookDecision(metrics.DecisionSignalError)
 			continue
 		}
 		workflowsSignaled++
+		metrics.RecordWebhookDecision(metrics.DecisionSignaled)
 	}
 
 	if len(errors) > 0 {
@@ -267,6 +286,7 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	result = metrics.ResultAccepted
 	w.WriteHeader(http.StatusOK)
 	resp := map[string]interface{}{
 		"status":    "accepted",
