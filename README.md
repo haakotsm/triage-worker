@@ -56,11 +56,17 @@ Alertmanager → webhook/handler.go → Temporal SignalWithStart
 ## Metrics
 
 The worker exposes Prometheus metrics on `METRICS_ADDR` (default `:9090`, path
-`/metrics`), kept off the ingress-exposed dashboard port. Three families are
+`/metrics`), kept off the ingress-exposed dashboard port. Four families are
 served on the same endpoint:
 
 - `triage_web_*` — HTTP/SSE dashboard metrics (request duration, SSE clients,
   reports-by-state, masked errors).
+- `triage_webhook_*`, `triage_agent_*`, `triage_enrichment_*`,
+  `triage_report_*` — domain ("business") metrics from `internal/metrics`:
+  Alertmanager webhook results/decisions, kagent triage-agent invocation
+  outcome and latency, per-source (Prometheus/Loki/Kubernetes) enrichment
+  health, and persisted report counts by severity/classification. All label
+  values are normalized to bounded sets so cardinality stays fixed.
 - **Temporal SDK metrics** (`temporal_*`) — the Go SDK's built-in client and
   worker metrics: workflow/activity execution latency and failures, task-queue
   schedule-to-start latency, poll success, and sticky-cache health. Wired via

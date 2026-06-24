@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/haakotsm/triage-worker/internal/metrics"
 	"github.com/haakotsm/triage-worker/internal/types"
 )
 
@@ -94,6 +95,8 @@ func (r *ReportActivity) StoreTriageReport(ctx context.Context, result types.Tri
 	if err != nil {
 		return fmt.Errorf("upsert report: %w", err)
 	}
+
+	metrics.RecordReportClassification(result.Severity, result.Classification)
 
 	return nil
 }

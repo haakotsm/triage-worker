@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/haakotsm/triage-worker/internal/metrics"
 	"github.com/haakotsm/triage-worker/internal/types"
 )
 
@@ -24,8 +25,18 @@ type Activities struct {
 	HTTPClient    *http.Client
 }
 
-// QueryPrometheus fetches relevant metrics for the incident.
+// QueryPrometheus fetches relevant metrics for the incident. It times the call
+// and records the per-source enrichment metric; the heavy lifting is in the
+// unexported queryPrometheus so the recorded method name stays stable for
+// Temporal activity registration.
 func (a *Activities) QueryPrometheus(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.PrometheusResult, error) {
+	start := time.Now()
+	res, err := a.queryPrometheus(ctx, identity, alerts)
+	recordEnrichment(metrics.SourcePrometheus, res.Available, err, start)
+	return res, err
+}
+
+func (a *Activities) queryPrometheus(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.PrometheusResult, error) {
 	client, err := promapi.NewClient(promapi.Config{
 		Address: a.PrometheusURL,
 	})
@@ -96,6 +107,13 @@ type K8sActivity struct {
 
 // QueryKubernetesAPI fetches pod states, events, and exit codes using client-go.
 func (k *K8sActivity) QueryKubernetesAPI(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.KubernetesResult, error) {
+	start := time.Now()
+	res, err := k.queryKubernetesAPI(ctx, identity, alerts)
+	recordEnrichment(metrics.SourceK8s, res.Available, err, start)
+	return res, err
+}
+
+func (k *K8sActivity) queryKubernetesAPI(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.KubernetesResult, error) {
 	clientset := k.Clientset
 
 	result := types.KubernetesResult{Available: true}
@@ -186,6 +204,24 @@ func matchesPodPrefix(podName, workloadName string) bool {
 
 // QueryLoki fetches recent error logs for the affected workload.
 func (a *Activities) QueryLoki(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.LokiResult, error) {
+	start := time.Now()
+	res, err := a.queryLoki(ctx, identity, alerts)
+	recordEnrichment(metrics.SourceLoki, res.Available, err, start)
+	return res, err
+}
+
+// recordEnrichment maps an enrichment sub-source call to its outcome metric. A
+// call counts as an error if it returned a non-nil error or reported the source
+// as unavailable (graceful-degradation returns nil error but Available=false).
+func recordEnrichment(source string, available bool, err error, start time.Time) {
+	outcome := metrics.OutcomeSuccess
+	if err != nil || !available {
+		outcome = metrics.OutcomeError
+	}
+	metrics.RecordEnrichment(source, outcome, time.Since(start))
+}
+
+func (a *Activities) queryLoki(ctx context.Context, identity types.IncidentIdentity, alerts []types.Alert) (types.LokiResult, error) {
 	// LogQL query for errors in the last 30 minutes
 	query := fmt.Sprintf(
 		`{namespace="%s"} |~ "(?i)(error|fatal|panic|exception)" | line_format "{{.message}}"`,
@@ -262,8 +298,8 @@ func (a *Activities) QueryLoki(ctx context.Context, identity types.IncidentIdent
 
 // lokiQueryResponse models the Loki query_range response.
 type lokiQueryResponse struct {
-	Status string       `json:"status"`
-	Data   lokiData     `json:"data"`
+	Status string   `json:"status"`
+	Data   lokiData `json:"data"`
 }
 
 type lokiData struct {
