@@ -38,8 +38,9 @@ type a2aMessageSend struct {
 }
 
 type a2aMessage struct {
-	Role  string    `json:"role"`
-	Parts []a2aPart `json:"parts"`
+	Role     string                     `json:"role"`
+	Parts    []a2aPart                  `json:"parts"`
+	Metadata map[string]json.RawMessage `json:"metadata,omitempty"`
 }
 
 type a2aPart struct {
@@ -61,14 +62,16 @@ type a2aTaskStatus struct {
 }
 
 type a2aArtifact struct {
-	ArtifactID string    `json:"artifactId"`
-	Parts      []a2aPart `json:"parts"`
+	ArtifactID string                     `json:"artifactId"`
+	Parts      []a2aPart                  `json:"parts"`
+	Metadata   map[string]json.RawMessage `json:"metadata,omitempty"`
 }
 
 type a2aResult struct {
-	Status    a2aTaskStatus `json:"status"`
-	Artifacts []a2aArtifact `json:"artifacts,omitempty"`
-	Message   *a2aMessage   `json:"message,omitempty"`
+	Status    a2aTaskStatus              `json:"status"`
+	Artifacts []a2aArtifact              `json:"artifacts,omitempty"`
+	Message   *a2aMessage                `json:"message,omitempty"`
+	Metadata  map[string]json.RawMessage `json:"metadata,omitempty"`
 }
 
 type a2aError struct {
@@ -76,7 +79,103 @@ type a2aError struct {
 	Message string `json:"message"`
 }
 
-// InvokeTriageAgent calls the error-triage-agent with correlated alerts and enrichment context.
+// tokenUsage is the normalized per-request LLM token accounting extracted from
+// an A2A response, regardless of the upstream framework's field naming.
+type tokenUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}
+
+// extractTokenUsage probes the candidate metadata locations of an A2A task
+// result for an LLM usage block and returns the first one found (nil if none).
+//
+// kagent runs on Google ADK, which surfaces usage at result.metadata
+// (key "kagent_usage_metadata") in Gemini shape — confirmed live against the
+// error-triage-agent. We also probe artifact/message metadata and accept
+// OpenAI- and Ollama-shaped usage as defensive fallbacks in case the framework
+// or model backend changes.
+func extractTokenUsage(result *a2aResult) *tokenUsage {
+	if result == nil {
+		return nil
+	}
+
+	candidates := []map[string]json.RawMessage{result.Metadata}
+	for i := range result.Artifacts {
+		candidates = append(candidates, result.Artifacts[i].Metadata)
+	}
+	if result.Status.Message != nil {
+		candidates = append(candidates, result.Status.Message.Metadata)
+	}
+	if result.Message != nil {
+		candidates = append(candidates, result.Message.Metadata)
+	}
+
+	for _, md := range candidates {
+		if u := usageFromMetadata(md); u != nil {
+			return u
+		}
+	}
+	return nil
+}
+
+// usageFromMetadata pulls a normalized tokenUsage out of a single A2A metadata
+// map, trying the known usage shapes in priority order. Returns nil if the map
+// holds no recognizable, non-empty usage block.
+func usageFromMetadata(md map[string]json.RawMessage) *tokenUsage {
+	if md == nil {
+		return nil
+	}
+
+	// Google ADK / Gemini shape (what kagent actually emits today).
+	if raw, ok := md["kagent_usage_metadata"]; ok {
+		var adk struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+			TotalTokenCount      int `json:"totalTokenCount"`
+		}
+		if err := json.Unmarshal(raw, &adk); err == nil {
+			if u := newTokenUsage(adk.PromptTokenCount, adk.CandidatesTokenCount, adk.TotalTokenCount); u != nil {
+				return u
+			}
+		}
+	}
+
+	// Generic "usage" block: OpenAI shape, with Ollama-native fallback.
+	if raw, ok := md["usage"]; ok {
+		var u struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+			PromptEvalCount  int `json:"prompt_eval_count"`
+			EvalCount        int `json:"eval_count"`
+		}
+		if err := json.Unmarshal(raw, &u); err == nil {
+			if tu := newTokenUsage(u.PromptTokens, u.CompletionTokens, u.TotalTokens); tu != nil {
+				return tu
+			}
+			if tu := newTokenUsage(u.PromptEvalCount, u.EvalCount, 0); tu != nil {
+				return tu
+			}
+		}
+	}
+
+	return nil
+}
+
+// newTokenUsage builds a tokenUsage, deriving total from prompt+completion when
+// the upstream block omits it. Returns nil if all counts are non-positive so an
+// empty/zero usage block is treated as "absent".
+func newTokenUsage(prompt, completion, total int) *tokenUsage {
+	if prompt <= 0 && completion <= 0 && total <= 0 {
+		return nil
+	}
+	if total <= 0 {
+		total = prompt + completion
+	}
+	return &tokenUsage{PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total}
+}
+
 func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Alert, enrichment types.EnrichmentResult) (report types.TriageReport, err error) {
 	// Record invocation outcome + latency on every return path. The fallback
 	// path (unstructured LLM output) returns a nil error and so counts as a
@@ -152,14 +251,24 @@ func (a *AgentActivity) InvokeTriageAgent(ctx context.Context, alerts []types.Al
 	// Handle response — may be SSE stream or plain JSON
 	contentType := resp.Header.Get("Content-Type")
 	var agentText string
+	var usage *tokenUsage
 
 	if strings.Contains(contentType, "text/event-stream") {
-		agentText, err = readSSEResponse(resp.Body)
+		agentText, usage, err = readSSEResponse(resp.Body)
 	} else {
-		agentText, err = readJSONRPCResponse(resp.Body)
+		agentText, usage, err = readJSONRPCResponse(resp.Body)
 	}
 	if err != nil {
 		return types.TriageReport{}, err
+	}
+
+	// Record token usage regardless of whether the report parses below — the
+	// tokens were spent either way. A missing usage block trips the watchdog
+	// counter but never fails the request.
+	if usage != nil {
+		metrics.RecordAgentTokens(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+	} else {
+		metrics.RecordAgentTokenUsageMissing()
 	}
 
 	// Strip markdown code fences — small LLMs often wrap JSON in ```json ... ```
@@ -245,44 +354,50 @@ func coerceToStringSlice(raw json.RawMessage) json.RawMessage {
 
 // readJSONRPCResponse reads a standard JSON-RPC response.
 // Supports both artifacts-based (kagent) and message-based (standard A2A) response formats.
-func readJSONRPCResponse(body io.Reader) (string, error) {
+// It returns the agent text and any parseable token-usage block (nil if absent).
+func readJSONRPCResponse(body io.Reader) (string, *tokenUsage, error) {
 	var a2aResp a2aResponse
 	if err := json.NewDecoder(body).Decode(&a2aResp); err != nil {
-		return "", temporal.NewApplicationError(
+		return "", nil, temporal.NewApplicationError(
 			fmt.Sprintf("decode A2A response: %v", err), "ParseError", err)
 	}
 	if a2aResp.Error != nil {
 		// JSON-RPC client errors (-32600 to -32602) are non-retryable
 		if a2aResp.Error.Code >= -32602 && a2aResp.Error.Code <= -32600 {
-			return "", temporal.NewNonRetryableApplicationError(
+			return "", nil, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("A2A error %d: %s", a2aResp.Error.Code, a2aResp.Error.Message),
 				"A2AClientError", nil)
 		}
-		return "", fmt.Errorf("A2A error %d: %s", a2aResp.Error.Code, a2aResp.Error.Message)
+		return "", nil, fmt.Errorf("A2A error %d: %s", a2aResp.Error.Code, a2aResp.Error.Message)
 	}
 	if a2aResp.Result == nil {
-		return "", temporal.NewApplicationError(
+		return "", nil, temporal.NewApplicationError(
 			"empty agent response", "ParseError", nil)
 	}
+	usage := extractTokenUsage(a2aResp.Result)
 	// kagent returns result.artifacts[].parts[]
 	if len(a2aResp.Result.Artifacts) > 0 && len(a2aResp.Result.Artifacts[0].Parts) > 0 {
-		return a2aResp.Result.Artifacts[0].Parts[0].Text, nil
+		return a2aResp.Result.Artifacts[0].Parts[0].Text, usage, nil
 	}
 	// Fallback: standard A2A result.message.parts[]
 	if a2aResp.Result.Message != nil && len(a2aResp.Result.Message.Parts) > 0 {
-		return a2aResp.Result.Message.Parts[0].Text, nil
+		return a2aResp.Result.Message.Parts[0].Text, usage, nil
 	}
 	// Fallback: status.message may contain agent text (some kagent versions)
 	if a2aResp.Result.Status.Message != nil && len(a2aResp.Result.Status.Message.Parts) > 0 {
-		return a2aResp.Result.Status.Message.Parts[0].Text, nil
+		return a2aResp.Result.Status.Message.Parts[0].Text, usage, nil
 	}
-	return "", temporal.NewApplicationError(
+	return "", usage, temporal.NewApplicationError(
 		"empty agent response", "ParseError", nil)
 }
 
-// readSSEResponse consumes an SSE stream and returns the final text content.
-func readSSEResponse(body io.Reader) (string, error) {
+// readSSEResponse consumes an SSE stream and returns the final text content and
+// any parseable token-usage block (nil if absent).
+func readSSEResponse(body io.Reader) (string, *tokenUsage, error) {
 	scanner := bufio.NewScanner(body)
+	// Agent responses with full enrichment context can exceed bufio.Scanner's
+	// default 64KB line cap; raise it so a long SSE data event isn't truncated.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var lastData string
 
 	for scanner.Scan() {
@@ -292,11 +407,11 @@ func readSSEResponse(body io.Reader) (string, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read SSE stream: %w", err)
+		return "", nil, fmt.Errorf("read SSE stream: %w", err)
 	}
 
 	if lastData == "" {
-		return "", temporal.NewNonRetryableApplicationError(
+		return "", nil, temporal.NewNonRetryableApplicationError(
 			"empty SSE stream", "ParseError", nil)
 	}
 
@@ -304,17 +419,19 @@ func readSSEResponse(body io.Reader) (string, error) {
 	var a2aResp a2aResponse
 	if err := json.Unmarshal([]byte(lastData), &a2aResp); err != nil {
 		// Maybe it's just the text directly
-		return lastData, nil
+		return lastData, nil, nil
 	}
 	if a2aResp.Result != nil {
+		usage := extractTokenUsage(a2aResp.Result)
 		if len(a2aResp.Result.Artifacts) > 0 && len(a2aResp.Result.Artifacts[0].Parts) > 0 {
-			return a2aResp.Result.Artifacts[0].Parts[0].Text, nil
+			return a2aResp.Result.Artifacts[0].Parts[0].Text, usage, nil
 		}
 		if a2aResp.Result.Message != nil && len(a2aResp.Result.Message.Parts) > 0 {
-			return a2aResp.Result.Message.Parts[0].Text, nil
+			return a2aResp.Result.Message.Parts[0].Text, usage, nil
 		}
+		return lastData, usage, nil
 	}
-	return lastData, nil
+	return lastData, nil, nil
 }
 
 // stripMarkdownJSON extracts JSON from LLM responses that wrap it in markdown

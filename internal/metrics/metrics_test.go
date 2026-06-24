@@ -138,6 +138,35 @@ func TestRecordEnrichment(t *testing.T) {
 	}
 }
 
+func TestRecordAgentTokens(t *testing.T) {
+	beforePrompt := testutil.ToFloat64(agentTokensTotal.WithLabelValues(TokenTypePrompt))
+	beforeCompletion := testutil.ToFloat64(agentTokensTotal.WithLabelValues(TokenTypeCompletion))
+
+	RecordAgentTokens(946, 199, 1145)
+
+	if got := testutil.ToFloat64(agentTokensTotal.WithLabelValues(TokenTypePrompt)); got != beforePrompt+946 {
+		t.Errorf("prompt tokens = %v, want %v", got, beforePrompt+946)
+	}
+	if got := testutil.ToFloat64(agentTokensTotal.WithLabelValues(TokenTypeCompletion)); got != beforeCompletion+199 {
+		t.Errorf("completion tokens = %v, want %v", got, beforeCompletion+199)
+	}
+
+	// Non-positive counts are ignored (no panic, no negative/zero additions).
+	beforePrompt = testutil.ToFloat64(agentTokensTotal.WithLabelValues(TokenTypePrompt))
+	RecordAgentTokens(0, -5, 0)
+	if got := testutil.ToFloat64(agentTokensTotal.WithLabelValues(TokenTypePrompt)); got != beforePrompt {
+		t.Errorf("prompt tokens changed on zero input: %v != %v", got, beforePrompt)
+	}
+}
+
+func TestRecordAgentTokenUsageMissing(t *testing.T) {
+	before := testutil.ToFloat64(agentTokenUsageMissingTotal)
+	RecordAgentTokenUsageMissing()
+	if got := testutil.ToFloat64(agentTokenUsageMissingTotal); got != before+1 {
+		t.Errorf("missing counter = %v, want %v", got, before+1)
+	}
+}
+
 func TestRecordReportClassification(t *testing.T) {
 	before := testutil.ToFloat64(reportClassificationsTotal.WithLabelValues("critical", "OOM"))
 	RecordReportClassification("critical", "OOM")

@@ -50,6 +50,12 @@ const (
 	OutcomeError   = "error"
 )
 
+// Token type label values for agent token accounting. Bounded set.
+const (
+	TokenTypePrompt     = "prompt"
+	TokenTypeCompletion = "completion"
+)
+
 var (
 	webhookRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
@@ -89,6 +95,28 @@ var (
 		// buckets up to the activity-level ceiling.
 		Buckets: []float64{0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300},
 	}, []string{"result"})
+
+	agentTokensTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "agent",
+		Name:      "tokens_total",
+		Help:      "LLM tokens consumed by triage-agent calls, by type (prompt/completion).",
+	}, []string{"type"})
+
+	agentTokensPerRequest = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: "agent",
+		Name:      "tokens_per_request",
+		Help:      "Total LLM tokens (prompt+completion) consumed per triage-agent call.",
+		Buckets:   []float64{100, 250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000},
+	})
+
+	agentTokenUsageMissingTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "agent",
+		Name:      "token_usage_missing_total",
+		Help:      "Triage-agent responses where no parseable token-usage block was found.",
+	})
 
 	enrichmentTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
@@ -134,6 +162,28 @@ func RecordAgentInvocation(result string, d time.Duration) {
 	result = normalizeOutcome(result)
 	agentInvocationsTotal.WithLabelValues(result).Inc()
 	agentInvocationDuration.WithLabelValues(result).Observe(d.Seconds())
+}
+
+// RecordAgentTokens records LLM token usage for a single triage-agent call:
+// prompt/completion split into the typed counter and the combined total into
+// the per-request histogram. Non-positive counts are ignored so a partially
+// populated usage block can't skew the counters with zeros.
+func RecordAgentTokens(prompt, completion, total int) {
+	if prompt > 0 {
+		agentTokensTotal.WithLabelValues(TokenTypePrompt).Add(float64(prompt))
+	}
+	if completion > 0 {
+		agentTokensTotal.WithLabelValues(TokenTypeCompletion).Add(float64(completion))
+	}
+	if total > 0 {
+		agentTokensPerRequest.Observe(float64(total))
+	}
+}
+
+// RecordAgentTokenUsageMissing increments the watchdog counter for triage-agent
+// responses that carried no parseable token-usage block.
+func RecordAgentTokenUsageMissing() {
+	agentTokenUsageMissingTotal.Inc()
 }
 
 // RecordEnrichment records the outcome and duration of an enrichment sub-source
