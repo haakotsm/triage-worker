@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -75,9 +76,42 @@ func TestMetricsMuxServesMetrics(t *testing.T) {
 	}
 }
 
+// TestPublicMuxDoesNotServeMetrics guards the actual security boundary: the
+// public dashboard/webhook router (served on LISTEN_ADDR, exposed via ingress)
+// must NOT serve Prometheus /metrics. We register a sentinel as the dashboard
+// handler and assert that GET /metrics reaches the sentinel — proving the
+// Prometheus handler is not registered on the public mux. If someone re-adds
+// /metrics to newPublicMux, the request would be intercepted before the
+// sentinel and this test fails.
+func TestPublicMuxDoesNotServeMetrics(t *testing.T) {
+	const sentinel = "dashboard-sentinel"
+	dashboard := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sentinel))
+	})
+
+	srv := httptest.NewServer(newPublicMux(dashboard))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), sentinel) {
+		t.Errorf("GET /metrics on public mux was not routed to the dashboard handler; "+
+			"body = %q. /metrics must not be served on the public (ingress-exposed) port", string(body))
+	}
+}
+
 // TestMetricsMuxDoesNotServeDashboard verifies the metrics router only exposes
 // /metrics; any other path (i.e. dashboard routes) is not served here. This
-// guards the separation that keeps /metrics off the public dashboard ingress.
+// keeps the dedicated metrics listener minimal.
 func TestMetricsMuxDoesNotServeDashboard(t *testing.T) {
 	srv := httptest.NewServer(newMetricsMux())
 	defer srv.Close()
