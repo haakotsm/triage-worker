@@ -49,7 +49,8 @@ Alertmanager → webhook/handler.go → Temporal SignalWithStart
 | `DATABASE_URL` | — | PostgreSQL connection string (enables report persistence, API and web dashboard) |
 | `WEBHOOK_SECRET` | — | Bearer token required on the Alertmanager webhook (empty = unauthenticated) |
 | `DEV_MODE` | `false` | When `true`, web dashboard injects a synthetic dev user and bypasses upstream auth headers |
-| `LISTEN_ADDR` | `:8080` | HTTP server listen address |
+| `LISTEN_ADDR` | `:8080` | Dashboard/webhook HTTP server listen address (public via ingress) |
+| `METRICS_ADDR` | `:9090` | Prometheus `/metrics` listen address (separate from the public dashboard port; not exposed via ingress) |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
 ## Development
