@@ -53,6 +53,23 @@ Alertmanager → webhook/handler.go → Temporal SignalWithStart
 | `METRICS_ADDR` | `:9090` | Prometheus `/metrics` listen address (separate from the public dashboard port; not exposed via ingress) |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
+## Metrics
+
+The worker exposes Prometheus metrics on `METRICS_ADDR` (default `:9090`, path
+`/metrics`), kept off the ingress-exposed dashboard port. Three families are
+served on the same endpoint:
+
+- `triage_web_*` — HTTP/SSE dashboard metrics (request duration, SSE clients,
+  reports-by-state, masked errors).
+- **Temporal SDK metrics** (`temporal_*`) — the Go SDK's built-in client and
+  worker metrics: workflow/activity execution latency and failures, task-queue
+  schedule-to-start latency, poll success, and sticky-cache health. Wired via
+  `internal/telemetry` (tally → Prometheus) into the default registry, so no
+  extra listener is needed.
+
+Scraped by the PodMonitor in `bodils-bibliotek-operations`
+(`argocd/platform/triage-worker/podmonitor.yaml`).
+
 ## Development
 
 ```bash

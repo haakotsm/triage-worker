@@ -13,6 +13,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
@@ -20,6 +21,7 @@ import (
 	triageapi "github.com/haakotsm/triage-worker/internal/api"
 	"github.com/haakotsm/triage-worker/internal/auth"
 	"github.com/haakotsm/triage-worker/internal/settings"
+	"github.com/haakotsm/triage-worker/internal/telemetry"
 	"github.com/haakotsm/triage-worker/internal/web"
 	"github.com/haakotsm/triage-worker/internal/webhook"
 	"github.com/haakotsm/triage-worker/internal/workflow"
@@ -101,10 +103,21 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	k8sActivity := &activity.K8sActivity{Clientset: k8sClientset}
 
 	// --- Temporal Client ---
+	// Wire the SDK's built-in metrics into the default Prometheus registry so
+	// workflow/activity latency, failures, and task-queue health surface on the
+	// same /metrics endpoint the worker already serves.
+	temporalMetrics, metricsCloser := telemetry.NewTemporalMetricsHandler(prometheus.DefaultRegisterer)
+	defer func() {
+		if err := metricsCloser.Close(); err != nil {
+			logger.Warn("temporal metrics scope close error", "error", err)
+		}
+	}()
+
 	tc, err := client.Dial(client.Options{
-		HostPort:  temporalAddr,
-		Namespace: temporalNS,
-		Logger:    newTemporalLogger(logger),
+		HostPort:       temporalAddr,
+		Namespace:      temporalNS,
+		Logger:         newTemporalLogger(logger),
+		MetricsHandler: temporalMetrics,
 	})
 	if err != nil {
 		return fmt.Errorf("connect to temporal: %w", err)
